@@ -66,8 +66,8 @@ jobs:
                   applicationId "com.ghaad.shield"
                   minSdk 24
                   targetSdk 33
-                  versionCode 5
-                  versionName "5.0"
+                  versionCode 6
+                  versionName "6.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -224,6 +224,7 @@ jobs:
           public class GhaadGuardService extends AccessibilityService {
               public static GhaadGuardService instance;
               public static volatile String currentPkg = "";
+              public static volatile long pauseLockUntil = 0;
               private WindowManager windowManager;
               private CensorOverlayView a11yOverlay;
 
@@ -241,3 +242,597 @@ jobs:
                               WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                                       | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                                       | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                      | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                              PixelFormat.TRANSLUCENT
+                      );
+                      params.gravity = Gravity.TOP | Gravity.START;
+                      windowManager.addView(a11yOverlay, params);
+                  } catch (Exception ignored) {}
+              }
+
+              public void updateOverlay(List<Rect> rects) {
+                  if (a11yOverlay != null) {
+                      a11yOverlay.post(() -> {
+                          a11yOverlay.setVisibility(View.VISIBLE);
+                          a11yOverlay.updateBoxes(rects);
+                      });
+                  }
+              }
+
+              public void setOverlayVisible(boolean visible) {
+                  if (a11yOverlay != null) {
+                      a11yOverlay.post(() -> a11yOverlay.setVisibility(visible ? View.VISIBLE : View.INVISIBLE));
+                  }
+              }
+
+              public static boolean isSafeSystemScreen() {
+                  String p = currentPkg.toLowerCase();
+                  return p.contains("launcher") || p.contains("com.ghaad.shield") || p.contains("systemui");
+              }
+
+              @Override
+              public void onAccessibilityEvent(AccessibilityEvent event) {
+                  if (event == null) return;
+                  if (event.getPackageName() != null) {
+                      String pkg = event.getPackageName().toString();
+                      if (!pkg.contains("com.ghaad.shield")) {
+                          currentPkg = pkg;
+                      }
+                      if (isSafeSystemScreen()) {
+                          updateOverlay(Collections.emptyList());
+                      }
+                  }
+
+                  if (System.currentTimeMillis() < pauseLockUntil) return;
+
+                  AccessibilityNodeInfo root = getRootInActiveWindow();
+                  if (root == null) return;
+
+                  String pkg = currentPkg.toLowerCase();
+                  if (pkg.contains("settings") || pkg.contains("packageinstaller") || pkg.contains("lool") || pkg.contains("security")) {
+                      String text = collectText(root).toLowerCase();
+                      if (text.contains("project ghaad")) {
+                          if (text.contains("app info") || text.contains("uninstall") || text.contains("force stop")
+                                  || text.contains("deactivate") || text.contains("turn off") || text.contains("remove")) {
+                              performGlobalAction(GLOBAL_ACTION_BACK);
+                              performGlobalAction(GLOBAL_ACTION_HOME);
+                          }
+                      }
+                  }
+              }
+
+              private String collectText(AccessibilityNodeInfo node) {
+                  if (node == null) return "";
+                  StringBuilder sb = new StringBuilder();
+                  if (node.getText() != null) sb.append(node.getText()).append(" ");
+                  if (node.getContentDescription() != null) sb.append(node.getContentDescription()).append(" ");
+                  int count = node.getChildCount();
+                  for (int i = 0; i < count; i++) {
+                      sb.append(collectText(node.getChild(i)));
+                  }
+                  return sb.toString();
+              }
+
+              @Override
+              public void onDestroy() {
+                  instance = null;
+                  super.onDestroy();
+              }
+
+              @Override
+              public void onInterrupt() {}
+          }
+          EOF
+
+          cat << 'EOF' > android_build/app/src/main/java/com/ghaad/shield/GhaadScreenService.java
+          package com.ghaad.shield;
+
+          import android.app.Activity;
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.Service;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.graphics.Bitmap;
+          import android.graphics.PixelFormat;
+          import android.graphics.Rect;
+          import android.hardware.display.DisplayManager;
+          import android.hardware.display.VirtualDisplay;
+          import android.media.Image;
+          import android.media.ImageReader;
+          import android.media.projection.MediaProjection;
+          import android.media.projection.MediaProjectionManager;
+          import android.os.Build;
+          import android.os.Handler;
+          import android.os.IBinder;
+          import android.os.Looper;
+          import android.util.DisplayMetrics;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.WindowManager;
+
+          import com.google.mlkit.vision.common.InputImage;
+          import com.google.mlkit.vision.face.Face;
+          import com.google.mlkit.vision.face.FaceDetection;
+          import com.google.mlkit.vision.face.FaceDetector;
+          import com.google.mlkit.vision.face.FaceDetectorOptions;
+
+          import java.nio.ByteBuffer;
+          import java.util.ArrayList;
+          import java.util.Collections;
+          import java.util.List;
+
+          public class GhaadScreenService extends Service {
+              public static boolean isRunning = false;
+              private MediaProjection mediaProjection;
+              private VirtualDisplay virtualDisplay;
+              private ImageReader imageReader;
+              private WindowManager windowManager;
+              private CensorOverlayView fallbackOverlay;
+              private FaceDetector faceDetector;
+              private Handler handler;
+              private int screenWidth, screenHeight, screenDensity;
+              private final int SCALE = 2;
+              private volatile boolean isScanning = false;
+
+              @Override
+              public void onCreate() {
+                  super.onCreate();
+                  isRunning = true;
+                  handler = new Handler(Looper.getMainLooper());
+                  windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+                  updateMetrics();
+
+                  fallbackOverlay = new CensorOverlayView(this);
+                  int layoutType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                          ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                          : WindowManager.LayoutParams.TYPE_PHONE;
+
+                  WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                          WindowManager.LayoutParams.MATCH_PARENT,
+                          WindowManager.LayoutParams.MATCH_PARENT,
+                          layoutType,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                  | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                  | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                  | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                          PixelFormat.TRANSLUCENT
+                  );
+                  params.gravity = Gravity.TOP | Gravity.START;
+                  windowManager.addView(fallbackOverlay, params);
+
+                  FaceDetectorOptions options = new FaceDetectorOptions.Builder()
+                          .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+                          .setMinFaceSize(0.03f)
+                          .build();
+                  faceDetector = FaceDetection.getClient(options);
+              }
+
+              private void updateMetrics() {
+                  DisplayMetrics metrics = new DisplayMetrics();
+                  windowManager.getDefaultDisplay().getRealMetrics(metrics);
+                  screenWidth = metrics.widthPixels;
+                  screenHeight = metrics.heightPixels;
+                  screenDensity = metrics.densityDpi;
+              }
+
+              @Override
+              public int onStartCommand(Intent intent, int flags, int startId) {
+                  startForegroundNotification();
+                  if (intent != null && intent.hasExtra("resultData")) {
+                      int resultCode = intent.getIntExtra("resultCode", Activity.RESULT_OK);
+                      Intent resultData = intent.getParcelableExtra("resultData");
+                      MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+                      mediaProjection = mpm.getMediaProjection(resultCode, resultData);
+                      mediaProjection.registerCallback(new MediaProjection.Callback() {}, handler);
+                      setupVirtualDisplay();
+                      handler.removeCallbacks(scanLoop);
+                      handler.postDelayed(scanLoop, 250);
+                  }
+                  return START_STICKY;
+              }
+
+              private void startForegroundNotification() {
+                  String channelId = "ghaad_ai_channel";
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      NotificationChannel channel = new NotificationChannel(
+                              channelId, "Project Ghaad AI Active", NotificationManager.IMPORTANCE_LOW);
+                      NotificationManager nm = getSystemService(NotificationManager.class);
+                      if (nm != null) nm.createNotificationChannel(channel);
+                  }
+                  Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                          ? new Notification.Builder(this, channelId)
+                          : new Notification.Builder(this);
+                  Notification notification = builder
+                          .setContentTitle("Project Ghaad AI Shield Active")
+                          .setContentText("Real-time Face & Body Censor is running")
+                          .setSmallIcon(android.R.drawable.ic_lock_lock)
+                          .build();
+                  startForeground(1, notification);
+              }
+
+              private void setupVirtualDisplay() {
+                  try {
+                      if (virtualDisplay != null) virtualDisplay.release();
+                      if (imageReader != null) imageReader.close();
+                  } catch (Exception ignored) {}
+
+                  updateMetrics();
+                  int capW = Math.max(100, screenWidth / SCALE);
+                  int capH = Math.max(100, screenHeight / SCALE);
+                  imageReader = ImageReader.newInstance(capW, capH, PixelFormat.RGBA_8888, 2);
+                  virtualDisplay = mediaProjection.createVirtualDisplay(
+                          "GhaadScanner",
+                          capW, capH, screenDensity,
+                          DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                          imageReader.getSurface(), null, handler
+                  );
+              }
+
+              private void pushBoxes(List<Rect> boxes) {
+                  if (GhaadGuardService.instance != null) {
+                      fallbackOverlay.updateBoxes(Collections.emptyList());
+                      fallbackOverlay.setVisibility(View.INVISIBLE);
+                      GhaadGuardService.instance.updateOverlay(boxes);
+                  } else {
+                      fallbackOverlay.setVisibility(View.VISIBLE);
+                      fallbackOverlay.updateBoxes(boxes);
+                  }
+              }
+
+              private void hideOverlaysForCapture() {
+                  if (GhaadGuardService.instance != null) {
+                      GhaadGuardService.instance.setOverlayVisible(false);
+                  }
+                  fallbackOverlay.setVisibility(View.INVISIBLE);
+              }
+
+              private void showOverlaysAfterCapture() {
+                  if (GhaadGuardService.instance != null) {
+                      GhaadGuardService.instance.setOverlayVisible(true);
+                  } else {
+                      fallbackOverlay.setVisibility(View.VISIBLE);
+                  }
+              }
+
+              private final Runnable scanLoop = new Runnable() {
+                  @Override
+                  public void run() {
+                      if (GhaadGuardService.isSafeSystemScreen()) {
+                          pushBoxes(Collections.emptyList());
+                          isScanning = false;
+                          handler.postDelayed(this, 300);
+                          return;
+                      }
+
+                      DisplayMetrics m = new DisplayMetrics();
+                      windowManager.getDefaultDisplay().getRealMetrics(m);
+                      if (m.widthPixels != screenWidth || m.heightPixels != screenHeight) {
+                          setupVirtualDisplay();
+                      }
+
+                      if (!isScanning && imageReader != null) {
+                          isScanning = true;
+                          hideOverlaysForCapture();
+                          handler.postDelayed(() -> captureAndAnalyze(), 55);
+                      }
+                      handler.postDelayed(this, 340);
+                  }
+              };
+
+              private void captureAndAnalyze() {
+                  Image image = null;
+                  Bitmap cleanBmp = null;
+                  try {
+                      image = imageReader.acquireLatestImage();
+                      if (image == null) {
+                          showOverlaysAfterCapture();
+                          isScanning = false;
+                          return;
+                      }
+                      int width = image.getWidth();
+                      int height = image.getHeight();
+                      Image.Plane[] planes = image.getPlanes();
+                      ByteBuffer buffer = planes[0].getBuffer();
+                      buffer.rewind();
+                      int pixelStride = planes[0].getPixelStride();
+                      int rowStride = planes[0].getRowStride();
+                      int rowPadding = rowStride - pixelStride * width;
+
+                      Bitmap bmp = Bitmap.createBitmap(
+                              width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888);
+                      bmp.copyPixelsFromBuffer(buffer);
+                      cleanBmp = Bitmap.createBitmap(bmp, 0, 0, width, height);
+                      bmp.recycle();
+                  } catch (Exception e) {
+                      showOverlaysAfterCapture();
+                      isScanning = false;
+                      return;
+                  } finally {
+                      if (image != null) {
+                          try { image.close(); } catch (Exception ignored) {}
+                      }
+                  }
+
+                  final Bitmap frameBmp = cleanBmp;
+                  final List<Rect> skinBoxes = detectSkinClusters(frameBmp);
+
+                  InputImage inputImage = InputImage.fromBitmap(frameBmp, 0);
+                  faceDetector.process(inputImage)
+                          .addOnSuccessListener(faces -> {
+                              List<Rect> finalBoxes = new ArrayList<>(skinBoxes);
+                              for (Face face : faces) {
+                                  Rect fb = face.getBoundingBox();
+                                  int fw = fb.width();
+                                  int fh = fb.height();
+
+                                  int left = Math.max(0, (fb.left - (int)(fw * 1.1f)) * SCALE);
+                                  int top = Math.max(0, (fb.top - (int)(fh * 0.6f)) * SCALE);
+                                  int right = Math.min(screenWidth, (fb.right + (int)(fw * 1.1f)) * SCALE);
+                                  int bottom = Math.min(screenHeight, (fb.bottom + (int)(fh * 3.8f)) * SCALE);
+
+                                  finalBoxes.add(new Rect(left, top, right, bottom));
+                              }
+                              pushBoxes(finalBoxes);
+                              frameBmp.recycle();
+                              isScanning = false;
+                          })
+                          .addOnFailureListener(e -> {
+                              pushBoxes(skinBoxes);
+                              frameBmp.recycle();
+                              isScanning = false;
+                          });
+              }
+
+              private List<Rect> detectSkinClusters(Bitmap bmp) {
+                  List<Rect> results = new ArrayList<>();
+                  try {
+                      int w = bmp.getWidth();
+                      int h = bmp.getHeight();
+                      int cols = 12;
+                      int rows = 18;
+                      int cellW = w / cols;
+                      int cellH = h / rows;
+                      if (cellW <= 4 || cellH <= 4) return results;
+
+                      boolean[][] skinGrid = new boolean[rows][cols];
+
+                      for (int r = 1; r < rows - 1; r++) {
+                          for (int c = 0; c < cols; c++) {
+                              int skinCount = 0;
+                              int totalSamples = 0;
+                              for (int dy = 2; dy < cellH; dy += 4) {
+                                  for (int dx = 2; dx < cellW; dx += 4) {
+                                      int px = bmp.getPixel(c * cellW + dx, r * cellH + dy);
+                                      int R = (px >> 16) & 0xFF;
+                                      int G = (px >> 8) & 0xFF;
+                                      int B = px & 0xFF;
+                                      totalSamples++;
+
+                                      if (R > 95 && G > 40 && B > 20 && R > G && R > B
+                                              && (R - Math.min(G, B)) > 20 && Math.abs(R - G) > 15 && R < 250) {
+                                          int Cr = 128 + ((112 * R - 93 * G - 18 * B) >> 8);
+                                          int Cb = 128 + ((-37 * R - 74 * G + 112 * B) >> 8);
+                                          if (Cr >= 135 && Cr <= 172 && Cb >= 80 && Cb <= 125) {
+                                              skinCount++;
+                                          }
+                                      }
+                                  }
+                              }
+                              if (totalSamples > 0 && (skinCount * 100 / totalSamples) >= 42) {
+                                  skinGrid[r][c] = true;
+                              }
+                          }
+                      }
+
+                      boolean[][] visited = new boolean[rows][cols];
+                      for (int r = 1; r < rows - 1; r++) {
+                          for (int c = 0; c < cols; c++) {
+                              if (skinGrid[r][c] && !visited[r][c]) {
+                                  int minR = r, maxR = r, minC = c, maxC = c, count = 0;
+                                  List<int[]> queue = new ArrayList<>();
+                                  queue.add(new int[]{r, c});
+                                  visited[r][c] = true;
+
+                                  int idx = 0;
+                                  while (idx < queue.size()) {
+                                      int[] curr = queue.get(idx++);
+                                      int cr = curr[0], cc = curr[1];
+                                      count++;
+                                      minR = Math.min(minR, cr);
+                                      maxR = Math.max(maxR, cr);
+                                      minC = Math.min(minC, cc);
+                                      maxC = Math.max(maxC, cc);
+
+                                      for (int dr = -1; dr <= 1; dr++) {
+                                          for (int dc = -1; dc <= 1; dc++) {
+                                              int nr = cr + dr, nc = cc + dc;
+                                              if (nr >= 1 && nr < rows - 1 && nc >= 0 && nc < cols
+                                                      && skinGrid[nr][nc] && !visited[nr][nc]) {
+                                                  visited[nr][nc] = true;
+                                                  queue.add(new int[]{nr, nc});
+                                              }
+                                          }
+                                      }
+                                  }
+
+                                  if (count >= 2) {
+                                      int left = Math.max(0, (minC * cellW - cellW / 2) * SCALE);
+                                      int top = Math.max(0, (minR * cellH - cellH) * SCALE);
+                                      int right = Math.min(screenWidth, ((maxC + 1) * cellW + cellW / 2) * SCALE);
+                                      int bottom = Math.min(screenHeight, ((maxR + 1) * cellH + cellH) * SCALE);
+                                      results.add(new Rect(left, top, right, bottom));
+                                  }
+                              }
+                          }
+                      }
+                  } catch (Exception ignored) {}
+                  return results;
+              }
+
+              @Override
+              public IBinder onBind(Intent intent) { return null; }
+          }
+          EOF
+
+          cat << 'EOF' > android_build/app/src/main/java/com/ghaad/shield/MainActivity.java
+          package com.ghaad.shield;
+
+          import android.app.Activity;
+          import android.app.admin.DevicePolicyManager;
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.graphics.Color;
+          import android.media.projection.MediaProjectionManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.provider.Settings;
+          import android.view.Gravity;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          public class MainActivity extends Activity {
+              private static final int REQ_MEDIA_PROJECTION = 1001;
+              private MediaProjectionManager mpm;
+              private Button btn1, btn2, btn3, btn4;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+
+                  LinearLayout layout = new LinearLayout(this);
+                  layout.setOrientation(LinearLayout.VERTICAL);
+                  layout.setBackgroundColor(Color.parseColor("#0b0f19"));
+                  layout.setGravity(Gravity.CENTER);
+                  layout.setPadding(50, 50, 50, 50);
+
+                  TextView title = new TextView(this);
+                  title.setText("PROJECT GHAAD v6.0\nSolid AI Face & Body Blocker");
+                  title.setTextColor(Color.WHITE);
+                  title.setTextSize(21);
+                  title.setGravity(Gravity.CENTER);
+                  title.setPadding(0, 0, 0, 35);
+                  // Secret Developer Pause: Long press title to pause lock for 60s
+                  title.setOnLongClickListener(v -> {
+                      GhaadGuardService.pauseLockUntil = System.currentTimeMillis() + 60000;
+                      DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+                      ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
+                      if (dpm != null && dpm.isAdminActive(comp)) {
+                          dpm.removeActiveAdmin(comp);
+                      }
+                      Toast.makeText(this, "Developer Unlock Active for 60s!", Toast.LENGTH_LONG).show();
+                      updateButtonStatus();
+                      return true;
+                  });
+                  layout.addView(title);
+
+                  btn1 = new Button(this);
+                  btn1.setOnClickListener(v -> {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                          Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                  Uri.parse("package:" + getPackageName()));
+                          startActivity(intent);
+                      } else {
+                          Toast.makeText(this, "Step 1 Already Active!", Toast.LENGTH_SHORT).show();
+                      }
+                  });
+                  layout.addView(btn1);
+
+                  addSpace(layout);
+
+                  btn2 = new Button(this);
+                  btn2.setOnClickListener(v -> {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                          Toast.makeText(this, "Complete Step 1 first!", Toast.LENGTH_LONG).show();
+                          return;
+                      }
+                      startActivityForResult(mpm.createScreenCaptureIntent(), REQ_MEDIA_PROJECTION);
+                  });
+                  layout.addView(btn2);
+
+                  addSpace(layout);
+
+                  btn3 = new Button(this);
+                  btn3.setOnClickListener(v -> {
+                      ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
+                      Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
+                      intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, comp);
+                      startActivity(intent);
+                  });
+                  layout.addView(btn3);
+
+                  addSpace(layout);
+
+                  btn4 = new Button(this);
+                  btn4.setOnClickListener(v -> {
+                      startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                  });
+                  layout.addView(btn4);
+
+                  setContentView(layout);
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  updateButtonStatus();
+              }
+
+              private void updateButtonStatus() {
+                  boolean s1 = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this);
+                  btn1.setText((s1 ? "✅ " : "❌ ") + "Step 1: Overlay Permission");
+
+                  boolean s2 = GhaadScreenService.isRunning;
+                  btn2.setText((s2 ? "✅ " : "❌ ") + "Step 2: Live AI Screen Blocker");
+
+                  DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+                  ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
+                  boolean s3 = dpm != null && dpm.isAdminActive(comp);
+                  btn3.setText((s3 ? "✅ " : "❌ ") + "Step 3: Anti-Uninstall Admin Lock");
+
+                  boolean s4 = GhaadGuardService.instance != null;
+                  btn4.setText((s4 ? "✅ " : "❌ ") + "Step 4: Solid Black & Settings Lock");
+              }
+
+              private void addSpace(LinearLayout layout) {
+                  TextView s = new TextView(this);
+                  s.setHeight(25);
+                  layout.addView(s);
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (requestCode == REQ_MEDIA_PROJECTION && resultCode == Activity.RESULT_OK && data != null) {
+                      Intent serviceIntent = new Intent(this, GhaadScreenService.class);
+                      serviceIntent.putExtra("resultCode", resultCode);
+                      serviceIntent.putExtra("resultData", data);
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          startForegroundService(serviceIntent);
+                      } else {
+                          startService(serviceIntent);
+                      }
+                      Toast.makeText(this, "Alhamdulillah! AI Blocker Started!", Toast.LENGTH_SHORT).show();
+                  }
+              }
+          }
+          EOF
+
+      - name: Build APK with Gradle
+        working-directory: android_build
+        run: gradle assembleDebug
+
+      - name: Prepare APK File
+        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_Mobile.apk
+
+      - name: Upload Compiled APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ghaad_Mobile_APK
+          path: Ghaad_Mobile.apk
