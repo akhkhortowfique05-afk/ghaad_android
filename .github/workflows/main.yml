@@ -1,4 +1,4 @@
-name: Build Ghaad V10 Windows-Engine APK
+name: Build Ghaad V11 Production Lockdown APK
 
 on:
   push:
@@ -20,7 +20,7 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Generate V10 Zero-Flicker Android Project
+      - name: Generate V11 Permanent Lockdown Android Project
         run: |
           mkdir -p android_build/app/src/main/java/com/ghaad/shield
           mkdir -p android_build/app/src/main/res/xml
@@ -40,7 +40,7 @@ jobs:
                   mavenCentral()
               }
           }
-          rootProject.name = "GhaadShieldV10"
+          rootProject.name = "GhaadShieldV11"
           include ':app'
           EOF
 
@@ -66,8 +66,8 @@ jobs:
                   applicationId "com.ghaad.shield"
                   minSdk 24
                   targetSdk 33
-                  versionCode 10
-                  versionName "10.0"
+                  versionCode 11
+                  versionName "11.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -88,14 +88,18 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
 
               <application
-                  android:label="Ghaad V10 Shield"
+                  android:label="Ghaad V11 Shield"
                   android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
                   <meta-data
                       android:name="com.google.mlkit.vision.DEPENDENCIES"
                       android:value="face"/>
 
-                  <activity android:name=".MainActivity" android:exported="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:excludeFromRecents="true"
+                      android:noHistory="true">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
@@ -128,12 +132,12 @@ jobs:
           cat << 'EOF' > android_build/app/src/main/res/xml/accessibility_config.xml
           <?xml version="1.0" encoding="utf-8"?>
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled"
+              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled|typeViewClicked|typeViewLongClicked"
               android:accessibilityFeedbackType="feedbackGeneric"
               android:canRetrieveWindowContent="true"
               android:canTakeScreenshot="true"
               android:accessibilityFlags="flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
-              android:notificationTimeout="40"/>
+              android:notificationTimeout="25"/>
           EOF
 
           cat << 'EOF' > android_build/app/src/main/res/xml/device_admin.xml
@@ -200,20 +204,16 @@ jobs:
                   postInvalidate();
               }
 
-              public synchronized List<Rect> getCurrentBoxes() {
-                  return new ArrayList<>(blockedRects);
-              }
-
               @Override
               protected synchronized void onDraw(Canvas canvas) {
                   super.onDraw(canvas);
                   for (Rect r : blockedRects) {
                       canvas.drawRect(r, boxPaint);
                       canvas.drawRect(r, borderPaint);
-                      canvas.drawText("GHAAD V10 BLOCKED", r.centerX(), r.centerY(), textPaint);
+                      canvas.drawText("GHAAD BLOCKED", r.centerX(), r.centerY(), textPaint);
                   }
                   if (showBadge) {
-                      canvas.drawText("● V10 ACTIVE", 30, 110, badgePaint);
+                      canvas.drawText("● GHAAD ACTIVE", 30, 110, badgePaint);
                   }
               }
           }
@@ -253,7 +253,6 @@ jobs:
           public class GhaadGuardService extends AccessibilityService {
               public static GhaadGuardService instance;
               public static volatile String activePkg = "";
-              public static volatile long pauseLockUntil = 0;
 
               private WindowManager windowManager;
               private CensorOverlayView overlayView;
@@ -262,9 +261,6 @@ jobs:
               private ExecutorService executor;
               private volatile boolean isBusy = false;
 
-              // ZERO-FLICKER SPATIAL TRACKER:
-              // Each active box stores the border color signature around it.
-              // As long as the video/thumbnail around the box hasn't scrolled away, the box stays 100% SOLID WITHOUT BLINKING!
               private static class TrackedBox {
                   Rect rect;
                   int[] borderColors;
@@ -308,7 +304,6 @@ jobs:
                   mainHandler.postDelayed(scanLoop, 400);
               }
 
-              // Strictly ignore Home Screen Wallpaper, Launcher, SystemUI, Keyboard, and Settings!
               private boolean isHomeOrSafeApp() {
                   String p = activePkg.toLowerCase();
                   if (p.isEmpty()) return true;
@@ -318,7 +313,6 @@ jobs:
                           || p.contains("systemui") || p.contains("android.settings")) {
                       return true;
                   }
-                  // Double check active window package directly from OS
                   try {
                       AccessibilityNodeInfo root = getRootInActiveWindow();
                       if (root != null) {
@@ -326,7 +320,7 @@ jobs:
                           root.recycle();
                           if (rootPkg != null) {
                               String rp = rootPkg.toString().toLowerCase();
-                              if (rp.contains("launcher") || rp.contains("com.ghaad.shield")) {
+                              if (rp.contains("launcher") || rp.contains("com.ghaad.shield") || rp.contains("settings")) {
                                   return true;
                               }
                           }
@@ -349,12 +343,10 @@ jobs:
                           isBusy = true;
                           captureWithoutBlinking();
                       }
-                      // Respect Android 11+ 1000ms screenshot rate limit so it NEVER fails!
                       mainHandler.postDelayed(this, 1020);
                   }
               };
 
-              // NEVER hides the black overlay! Captures screen as-is and keeps existing boxes 100% solid!
               private void captureWithoutBlinking() {
                   try {
                       takeScreenshot(Display.DEFAULT_DISPLAY, executor, new TakeScreenshotCallback() {
@@ -400,9 +392,6 @@ jobs:
                   final float scaleY = (float) screenH / bmp.getHeight();
                   final long now = System.currentTimeMillis();
 
-                  // STEP 1: Verify existing locked boxes WITHOUT hiding them!
-                  // If the user scrolled OR the video scene outside the box changed completely, release that box;
-                  // otherwise keep it 100% ROCK-SOLID!
                   synchronized (activeTrackedBoxes) {
                       if (userJustScrolled) {
                           activeTrackedBoxes.clear();
@@ -413,7 +402,7 @@ jobs:
                               TrackedBox tb = it.next();
                               int[] currentBorder = sampleOuterBorder(bmp, tb.rect, scaleX, scaleY);
                               if (isBorderChangedSignificantly(tb.borderColors, currentBorder)) {
-                                  it.remove(); // Scene changed or scrolled! Remove old box so new frame is scanned cleanly
+                                  it.remove();
                               } else {
                                   tb.lastVerifiedTime = now;
                               }
@@ -421,7 +410,6 @@ jobs:
                       }
                   }
 
-                  // STEP 2: Scan uncovered areas of the screen for new Female Faces & Exposed Bodies (Bikini/Dance/Cleavage)
                   final List<Rect> skinClusterBoxes = detectExposedBodyClusters(bmp, screenW, screenH, scaleX, scaleY);
 
                   InputImage image = InputImage.fromBitmap(bmp, 0);
@@ -434,13 +422,11 @@ jobs:
                                   if (isFemaleOrTargetPerson(bmp, fb)) {
                                       int fw = fb.width();
                                       int fh = fb.height();
-                                      // Tight, clean box around the person (NEVER covers the whole phone screen!)
                                       int left = Math.max(0, (int) ((fb.left - fw * 0.9f) * scaleX));
                                       int top = Math.max(0, (int) ((fb.top - fh * 0.5f) * scaleY));
                                       int right = Math.min(screenW, (int) ((fb.right + fw * 0.9f) * scaleX));
                                       int bottom = Math.min(screenH, (int) ((fb.bottom + fh * 2.6f) * scaleY));
 
-                                      // Cap maximum single face-box height to 55% of screen so it never blacks out entire phone
                                       if (bottom - top > (int) (screenH * 0.55f)) {
                                           bottom = top + (int) (screenH * 0.55f);
                                       }
@@ -464,7 +450,6 @@ jobs:
                                   }
                                   List<Rect> merged = mergeBoxesCleanly(allRects, screenW, screenH);
 
-                                  // Rebuild tracked list from merged boxes
                                   activeTrackedBoxes.clear();
                                   for (Rect mr : merged) {
                                       TrackedBox tb = new TrackedBox();
@@ -486,7 +471,6 @@ jobs:
                           });
               }
 
-              // Distinguishes Women (Hijab/Long Hair/Makeup/Exposed Skin) from Men in Nasheeds or Tutorials!
               private boolean isFemaleOrTargetPerson(Bitmap bmp, Rect fb) {
                   int w = bmp.getWidth(), h = bmp.getHeight();
                   int l = Math.max(0, fb.left), r = Math.min(w - 1, fb.right);
@@ -494,7 +478,6 @@ jobs:
                   int fw = fb.width(), fh = fb.height();
                   if (fw < 8 || fh < 8) return false;
 
-                  // 1. Verify human skin on face
                   int faceSkin = 0, faceTotal = 0;
                   for (int y = t; y <= b; y += 2) {
                       for (int x = l; x <= r; x += 2) {
@@ -504,8 +487,6 @@ jobs:
                   }
                   if (faceTotal == 0 || (faceSkin * 100 / faceTotal) < 15) return false;
 
-                  // 2. Check lower face (beard/mustache check): Men in nasheeds/tutorials have darker/textured lower jaw or short hair with open ears
-                  // Check chest/neck/shoulder skin exposure below chin (catches actresses, swimwear, open-neck dresses)
                   int chestTop = Math.min(h - 1, b);
                   int chestBot = Math.min(h - 1, b + (int)(fh * 1.8f));
                   int chestLeft = Math.max(0, l - fw / 2);
@@ -520,7 +501,6 @@ jobs:
                   }
                   boolean hasExposedNeckOrChest = chestTotal > 0 && (chestSkin * 100 / chestTotal) >= 16;
 
-                  // 3. Check Hijab / Long Hair framing both sides of the cheeks & jaw
                   int cheekTop = t + fh / 3;
                   int cheekBot = Math.min(h - 1, b + fh / 3);
                   int leftSideX = Math.max(0, l - fw / 4);
@@ -531,7 +511,6 @@ jobs:
                       frameTotal++;
                       int pxL = bmp.getPixel(leftSideX, y);
                       int pxR = bmp.getPixel(rightSideX, y);
-                      // Hijab/Long hair tightly wraps both left and right sides of the lower cheek/neck with non-skin uniform color
                       if (!isSkin(pxL) && !isSkin(pxR) && colorSimilarity(pxL, pxR) < 55) {
                           frameMatches++;
                       }
@@ -541,7 +520,6 @@ jobs:
                   return hasExposedNeckOrChest || hasHijabOrLongHairFrame;
               }
 
-              // Catches Bikini / Dance / Exposed Body scenes even when wearing sunglasses or turned away!
               private List<Rect> detectExposedBodyClusters(Bitmap bmp, int screenW, int screenH, float scaleX, float scaleY) {
                   List<Rect> boxes = new ArrayList<>();
                   int w = bmp.getWidth();
@@ -595,7 +573,6 @@ jobs:
                                       }
                                   }
                               }
-                              // Require at least 3 connected high-skin cells (prevents small hands/icons from triggering!)
                               if (count >= 3) {
                                   int left = Math.max(0, (int) ((minC * cellW - cellW / 2) * scaleX));
                                   int top = Math.max(0, (int) ((minR * cellH - cellH) * scaleY));
@@ -648,7 +625,6 @@ jobs:
                   int R = (px >> 16) & 0xFF;
                   int G = (px >> 8) & 0xFF;
                   int B = px & 0xFF;
-                  // Strict human skin filter (excludes yellow shirts, sand, and orange graphics!)
                   if (R > 95 && G > 45 && B > 25 && R > G && G > B && (R - G) > 15 && (R - B) < 115) {
                       int Cr = 128 + ((112 * R - 93 * G - 18 * B) >> 8);
                       int Cb = 128 + ((-37 * R - 74 * G + 112 * B) >> 8);
@@ -670,7 +646,6 @@ jobs:
                               if (Rect.intersects(a, b)) {
                                   Rect u = new Rect(a);
                                   u.union(b);
-                                  // Do not merge if union would cover more than 75% of the entire phone height!
                                   if (u.height() < (int) (screenH * 0.70f)) {
                                       merged.set(i, u);
                                       merged.remove(j);
@@ -703,21 +678,22 @@ jobs:
                       }
                   }
 
-                  if (System.currentTimeMillis() < pauseLockUntil) return;
+                  // IRONCLAD PERMANENT ANTI-UNINSTALL & ANTI-BYPASS GUARD:
+                  // Blocks App Drawer Long-Press Uninstall, PackageInstaller Dialogs, Accessibility Switch, Device Admin, and App Info!
+                  AccessibilityNodeInfo root = getRootInActiveWindow();
+                  if (root != null) {
+                      String text = collectText(root).toLowerCase();
+                      root.recycle();
 
-                  String pkg = activePkg.toLowerCase();
-                  if (pkg.contains("settings") || pkg.contains("packageinstaller") || pkg.contains("lool") || pkg.contains("security")) {
-                      AccessibilityNodeInfo root = getRootInActiveWindow();
-                      if (root != null) {
-                          String text = collectText(root).toLowerCase();
-                          root.recycle();
-                          if (text.contains("ghaad") || text.contains("v10 shield")) {
-                              if (text.contains("uninstall") || text.contains("force stop") || text.contains("storage")
-                                      || text.contains("permissions") || text.contains("deactivate") || text.contains("turn off")
-                                      || text.contains("installed") || text.contains("battery") || text.contains("app info")) {
-                                  performGlobalAction(GLOBAL_ACTION_BACK);
-                                  performGlobalAction(GLOBAL_ACTION_HOME);
-                              }
+                      if (text.contains("ghaad") || text.contains("v11 shield") || text.contains("v10 shield")) {
+                          // 1. Block Launcher Long-Press Popup ("Select | Add to Home | Uninstall") & PackageInstaller ("Do you want to uninstall this app?")
+                          if (text.contains("do you want to uninstall") || text.contains("add to home")
+                                  || text.contains("uninstall") || text.contains("force stop")
+                                  || text.contains("deactivate") || text.contains("app info")
+                                  || text.contains("shortcut") || text.contains("turn off")
+                                  || text.contains("remove") || text.contains("storage")) {
+                              performGlobalAction(GLOBAL_ACTION_BACK);
+                              performGlobalAction(GLOBAL_ACTION_HOME);
                           }
                       }
                   }
@@ -781,27 +757,15 @@ jobs:
                   layout.setPadding(60, 60, 60, 60);
 
                   TextView title = new TextView(this);
-                  title.setText("GHAAD SHIELD V10.0\nZero-Flicker Female & Body AI");
+                  title.setText("GHAAD SHIELD V11.0\nPermanent Lockdown Edition");
                   title.setTextColor(Color.parseColor("#10b981"));
                   title.setTextSize(23);
                   title.setGravity(Gravity.CENTER);
                   title.setPadding(0, 0, 0, 25);
-
-                  title.setOnLongClickListener(v -> {
-                      GhaadGuardService.pauseLockUntil = System.currentTimeMillis() + 60000;
-                      DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
-                      ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
-                      if (dpm != null && dpm.isAdminActive(comp)) {
-                          dpm.removeActiveAdmin(comp);
-                      }
-                      Toast.makeText(this, "Unlocked for 60 seconds!", Toast.LENGTH_LONG).show();
-                      updateStatus();
-                      return true;
-                  });
                   layout.addView(title);
 
                   TextView sub = new TextView(this);
-                  sub.setText("1. Never Blinks or Drops Curtain\n2. Ignores Men, Yellow Shirts & Wallpaper\n3. Blocks Female Faces & Bikini/Body");
+                  sub.setText("Once both steps are ✅ active, this app will lock itself permanently and cannot be uninstalled.");
                   sub.setTextColor(Color.parseColor("#cbd5e1"));
                   sub.setTextSize(14);
                   sub.setGravity(Gravity.CENTER);
@@ -823,6 +787,10 @@ jobs:
 
                   btnGuard = new Button(this);
                   btnGuard.setOnClickListener(v -> {
+                      if (GhaadGuardService.instance != null) {
+                          Toast.makeText(this, "Protection is Permanently Locked!", Toast.LENGTH_SHORT).show();
+                          return;
+                      }
                       startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
                   });
                   layout.addView(btnGuard);
@@ -833,17 +801,24 @@ jobs:
               @Override
               protected void onResume() {
                   super.onResume();
-                  updateStatus();
-              }
-
-              private void updateStatus() {
                   DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
                   ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
                   boolean s1 = dpm != null && dpm.isAdminActive(comp);
-                  btnAdmin.setText((s1 ? "✅ " : "❌ ") + "Step 1: Lock Uninstall (Device Admin)");
-
                   boolean s2 = GhaadGuardService.instance != null;
-                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Step 2: Activate V10 AI Blocker");
+
+                  // If BOTH protections are active, immediately close app & kick to Home Screen so nobody can tamper with it!
+                  if (s1 && s2) {
+                      Toast.makeText(this, "Ghaad Shield V11 is Permanently Active & Locked!", Toast.LENGTH_SHORT).show();
+                      Intent home = new Intent(Intent.ACTION_MAIN);
+                      home.addCategory(Intent.CATEGORY_HOME);
+                      home.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                      startActivity(home);
+                      finish();
+                      return;
+                  }
+
+                  btnAdmin.setText((s1 ? "✅ " : "❌ ") + "Step 1: Lock Uninstall (Device Admin)");
+                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Step 2: Activate Permanent AI Shield");
               }
           }
           EOF
@@ -853,10 +828,10 @@ jobs:
         run: gradle assembleDebug
 
       - name: Prepare APK File
-        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V10_Final.apk
+        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V11_Locked.apk
 
       - name: Upload Compiled APK
         uses: actions/upload-artifact@v4
         with:
-          name: Ghaad_V10_Final_APK
-          path: Ghaad_V10_Final.apk
+          name: Ghaad_V11_Locked_APK
+          path: Ghaad_V11_Locked.apk
