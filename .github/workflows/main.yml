@@ -1,4 +1,4 @@
-name: Build Clean Ghaad Android APK
+name: Build Real-Time Ghaad AI Blocker APK
 
 on:
   push:
@@ -20,9 +20,10 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Generate Play-Protect Safe Android Project
+      - name: Generate Real-Time AI Screen Blocker Android Project
         run: |
           mkdir -p android_build/app/src/main/java/com/ghaad/shield
+          mkdir -p android_build/app/src/main/res/xml
 
           cat << 'EOF' > android_build/settings.gradle
           pluginManagement {
@@ -64,21 +65,29 @@ jobs:
               defaultConfig {
                   applicationId "com.ghaad.shield"
                   minSdk 24
-                  targetSdk 34
-                  versionCode 2
-                  versionName "2.0"
+                  targetSdk 33
+                  versionCode 4
+                  versionName "4.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
           }
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.mlkit:face-detection:16.1.6'
+          }
           EOF
 
           cat << 'EOF' > android_build/app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.INTERNET"/>
+
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
               <application
                   android:label="Project Ghaad Shield"
@@ -90,19 +99,384 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
                   </activity>
+
+                  <!-- Real-Time AI Screen Scanner & Black Box Overlay Service -->
+                  <service
+                      android:name=".GhaadScreenService"
+                      android:enabled="true"
+                      android:exported="false"
+                      android:foregroundServiceType="mediaProjection"/>
+
+                  <!-- Anti-Uninstall & Anti-Force-Stop Accessibility Guard -->
+                  <service android:name=".GhaadGuardService"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService"/>
+                      </intent-filter>
+                      <meta-data android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_config"/>
+                  </service>
+
+                  <!-- Device Admin Lock -->
+                  <receiver android:name=".GhaadAdminReceiver"
+                      android:permission="android.permission.BIND_DEVICE_ADMIN"
+                      android:exported="true">
+                      <meta-data android:name="android.app.device_admin"
+                          android:resource="@xml/device_admin"/>
+                      <intent-filter>
+                          <action android:name="android.app.action.DEVICE_ADMIN_ENABLED"/>
+                      </intent-filter>
+                  </receiver>
               </application>
           </manifest>
+          EOF
+
+          cat << 'EOF' > android_build/app/src/main/res/xml/accessibility_config.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:canRetrieveWindowContent="true"
+              android:notificationTimeout="30"/>
+          EOF
+
+          cat << 'EOF' > android_build/app/src/main/res/xml/device_admin.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-policies>
+                  <force-lock/>
+              </uses-policies>
+          </device-admin>
+          EOF
+
+          cat << 'EOF' > android_build/app/src/main/java/com/ghaad/shield/GhaadAdminReceiver.java
+          package com.ghaad.shield;
+          import android.app.admin.DeviceAdminReceiver;
+          public class GhaadAdminReceiver extends DeviceAdminReceiver {}
+          EOF
+
+          cat << 'EOF' > android_build/app/src/main/java/com/ghaad/shield/CensorOverlayView.java
+          package com.ghaad.shield;
+
+          import android.content.Context;
+          import android.graphics.Canvas;
+          import android.graphics.Color;
+          import android.graphics.Paint;
+          import android.graphics.Rect;
+          import android.view.View;
+          import java.util.ArrayList;
+          import java.util.List;
+
+          public class CensorOverlayView extends View {
+              private final List<Rect> blockedRects = new ArrayList<>();
+              private final Paint boxPaint = new Paint();
+              private final Paint borderPaint = new Paint();
+              private final Paint textPaint = new Paint();
+
+              public CensorOverlayView(Context context) {
+                  super(context);
+                  boxPaint.setColor(Color.BLACK);
+                  boxPaint.setStyle(Paint.Style.FILL);
+
+                  borderPaint.setColor(Color.RED);
+                  borderPaint.setStyle(Paint.Style.STROKE);
+                  borderPaint.setStrokeWidth(4f);
+
+                  textPaint.setColor(Color.WHITE);
+                  textPaint.setTextSize(32f);
+                  textPaint.setTextAlign(Paint.Align.CENTER);
+                  textPaint.setFakeBoldText(true);
+              }
+
+              public void updateBoxes(List<Rect> newRects) {
+                  blockedRects.clear();
+                  blockedRects.addAll(newRects);
+                  postInvalidate();
+              }
+
+              public boolean hasBoxes() {
+                  return !blockedRects.isEmpty();
+              }
+
+              @Override
+              protected void onDraw(Canvas canvas) {
+                  super.onDraw(canvas);
+                  for (Rect r : blockedRects) {
+                      canvas.drawRect(r, boxPaint);
+                      canvas.drawRect(r, borderPaint);
+                      canvas.drawText("GHAAD BLOCKED", r.centerX(), r.centerY(), textPaint);
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > android_build/app/src/main/java/com/ghaad/shield/GhaadScreenService.java
+          package com.ghaad.shield;
+
+          import android.app.Activity;
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.Service;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.graphics.Bitmap;
+          import android.graphics.PixelFormat;
+          import android.graphics.Rect;
+          import android.hardware.display.DisplayManager;
+          import android.hardware.display.VirtualDisplay;
+          import android.media.Image;
+          import android.media.ImageReader;
+          import android.media.projection.MediaProjection;
+          import android.media.projection.MediaProjectionManager;
+          import android.os.Build;
+          import android.os.Handler;
+          import android.os.IBinder;
+          import android.os.Looper;
+          import android.util.DisplayMetrics;
+          import android.view.Gravity;
+          import android.view.WindowManager;
+
+          import com.google.mlkit.vision.common.InputImage;
+          import com.google.mlkit.vision.face.Face;
+          import com.google.mlkit.vision.face.FaceDetection;
+          import com.google.mlkit.vision.face.FaceDetector;
+          import com.google.mlkit.vision.face.FaceDetectorOptions;
+
+          import java.nio.ByteBuffer;
+          import java.util.ArrayList;
+          import java.util.List;
+
+          public class GhaadScreenService extends Service {
+              private MediaProjection mediaProjection;
+              private VirtualDisplay virtualDisplay;
+              private ImageReader imageReader;
+              private WindowManager windowManager;
+              private CensorOverlayView overlayView;
+              private FaceDetector faceDetector;
+              private Handler handler;
+              private int screenWidth, screenHeight, screenDensity;
+              private final int SCALE = 2;
+              private boolean isScanning = false;
+
+              @Override
+              public void onCreate() {
+                  super.onCreate();
+                  handler = new Handler(Looper.getMainLooper());
+                  windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+
+                  DisplayMetrics metrics = getResources().getDisplayMetrics();
+                  screenWidth = metrics.widthPixels;
+                  screenHeight = metrics.heightPixels;
+                  screenDensity = metrics.densityDpi;
+
+                  // Setup Overlay Window (Click-through pitch-black censor boxes)
+                  overlayView = new CensorOverlayView(this);
+                  int layoutType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                          ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                          : WindowManager.LayoutParams.TYPE_PHONE;
+
+                  WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                          WindowManager.LayoutParams.MATCH_PARENT,
+                          WindowManager.LayoutParams.MATCH_PARENT,
+                          layoutType,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                  | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                  | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                  | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                          PixelFormat.TRANSLUCENT
+                  );
+                  params.gravity = Gravity.TOP | Gravity.START;
+                  windowManager.addView(overlayView, params);
+
+                  // Initialize On-Device AI Engine
+                  FaceDetectorOptions options = new FaceDetectorOptions.Builder()
+                          .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                          .setMinFaceSize(0.04f)
+                          .build();
+                  faceDetector = FaceDetection.getClient(options);
+              }
+
+              @Override
+              public int onStartCommand(Intent intent, int flags, int startId) {
+                  startForegroundNotification();
+                  if (intent != null && intent.hasExtra("resultData")) {
+                      int resultCode = intent.getIntExtra("resultCode", Activity.RESULT_OK);
+                      Intent resultData = intent.getParcelableExtra("resultData");
+                      MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+                      mediaProjection = mpm.getMediaProjection(resultCode, resultData);
+                      setupVirtualDisplay();
+                      handler.postDelayed(scanLoop, 300);
+                  }
+                  return START_STICKY;
+              }
+
+              private void startForegroundNotification() {
+                  String channelId = "ghaad_ai_channel";
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      NotificationChannel channel = new NotificationChannel(
+                              channelId, "Project Ghaad AI Active", NotificationManager.IMPORTANCE_LOW);
+                      NotificationManager nm = getSystemService(NotificationManager.class);
+                      if (nm != null) nm.createNotificationChannel(channel);
+                  }
+                  Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                          ? new Notification.Builder(this, channelId)
+                          : new Notification.Builder(this);
+                  Notification notification = builder
+                          .setContentTitle("Project Ghaad AI Shield Active")
+                          .setContentText("Real-time screen protection is running")
+                          .setSmallIcon(android.R.drawable.ic_lock_lock)
+                          .build();
+                  startForeground(1, notification);
+              }
+
+              private void setupVirtualDisplay() {
+                  int capW = screenWidth / SCALE;
+                  int capH = screenHeight / SCALE;
+                  imageReader = ImageReader.newInstance(capW, capH, PixelFormat.RGBA_8888, 2);
+                  virtualDisplay = mediaProjection.createVirtualDisplay(
+                          "GhaadScreenScanner",
+                          capW, capH, screenDensity,
+                          DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                          imageReader.getSurface(), null, null
+                  );
+              }
+
+              private final Runnable scanLoop = new Runnable() {
+                  @Override
+                  public void run() {
+                      if (!isScanning && imageReader != null) {
+                          isScanning = true;
+                          if (overlayView.hasBoxes()) {
+                              overlayView.setAlpha(0f);
+                              handler.postDelayed(() -> captureAndAnalyze(), 45);
+                          } else {
+                              captureAndAnalyze();
+                          }
+                      }
+                      handler.postDelayed(this, 320);
+                  }
+              };
+
+              private void captureAndAnalyze() {
+                  Image image = null;
+                  try {
+                      image = imageReader.acquireLatestImage();
+                      overlayView.setAlpha(1f);
+                      if (image == null) {
+                          isScanning = false;
+                          return;
+                      }
+                      int width = image.getWidth();
+                      int height = image.getHeight();
+                      Image.Plane[] planes = image.getPlanes();
+                      ByteBuffer buffer = planes[0].getBuffer();
+                      int pixelStride = planes[0].getPixelStride();
+                      int rowStride = planes[0].getRowStride();
+                      int rowPadding = rowStride - pixelStride * width;
+
+                      Bitmap bmp = Bitmap.createBitmap(
+                              width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888);
+                      bmp.copyPixelsFromBuffer(buffer);
+                      Bitmap cleanBmp = Bitmap.createBitmap(bmp, 0, 0, width, height);
+                      bmp.recycle();
+                      image.close();
+                      image = null;
+
+                      InputImage inputImage = InputImage.fromBitmap(cleanBmp, 0);
+                      faceDetector.process(inputImage)
+                              .addOnSuccessListener(faces -> {
+                                  List<Rect> boxes = new ArrayList<>();
+                                  for (Face face : faces) {
+                                      Rect fb = face.getBoundingBox();
+                                      int fw = fb.width();
+                                      int fh = fb.height();
+
+                                      // Expand face box to cover hair, face, chest, and full body
+                                      int left = Math.max(0, (fb.left - (int)(fw * 0.9f)) * SCALE);
+                                      int top = Math.max(0, (fb.top - (int)(fh * 0.5f)) * SCALE);
+                                      int right = Math.min(screenWidth, (fb.right + (int)(fw * 0.9f)) * SCALE);
+                                      int bottom = Math.min(screenHeight, (fb.bottom + (int)(fh * 3.2f)) * SCALE);
+
+                                      boxes.add(new Rect(left, top, right, bottom));
+                                  }
+                                  overlayView.updateBoxes(boxes);
+                                  cleanBmp.recycle();
+                                  isScanning = false;
+                              })
+                              .addOnFailureListener(e -> {
+                                  cleanBmp.recycle();
+                                  isScanning = false;
+                              });
+                  } catch (Exception e) {
+                      overlayView.setAlpha(1f);
+                      if (image != null) image.close();
+                      isScanning = false;
+                  }
+              }
+
+              @Override
+              public IBinder onBind(Intent intent) { return null; }
+          }
+          EOF
+
+          cat << 'EOF' > android_build/app/src/main/java/com/ghaad/shield/GhaadGuardService.java
+          package com.ghaad.shield;
+
+          import android.accessibilityservice.AccessibilityService;
+          import android.view.accessibility.AccessibilityEvent;
+          import android.view.accessibility.AccessibilityNodeInfo;
+
+          public class GhaadGuardService extends AccessibilityService {
+              @Override
+              public void onAccessibilityEvent(AccessibilityEvent event) {
+                  if (event == null) return;
+                  AccessibilityNodeInfo root = getRootInActiveWindow();
+                  if (root == null) return;
+
+                  String pkg = event.getPackageName() != null ? event.getPackageName().toString().toLowerCase() : "";
+                  String text = collectText(root).toLowerCase();
+
+                  // Block Force Stop, Uninstall, App Info & Device Admin deactivation
+                  if (pkg.contains("settings") || pkg.contains("packageinstaller") || pkg.contains("lool")) {
+                      if (text.contains("project ghaad")) {
+                          if (text.contains("force stop") || text.contains("uninstall") || text.contains("app info") || text.contains("deactivate")) {
+                              performGlobalAction(GLOBAL_ACTION_BACK);
+                              performGlobalAction(GLOBAL_ACTION_HOME);
+                          }
+                      }
+                  }
+              }
+
+              private String collectText(AccessibilityNodeInfo node) {
+                  if (node == null) return "";
+                  StringBuilder sb = new StringBuilder();
+                  if (node.getText() != null) sb.append(node.getText()).append(" ");
+                  if (node.getContentDescription() != null) sb.append(node.getContentDescription()).append(" ");
+                  for (int i = 0; i < node.getChildCount(); i++) {
+                      sb.append(collectText(node.getChild(i)));
+                  }
+                  return sb.toString();
+              }
+
+              @Override
+              public void onInterrupt() {}
+          }
           EOF
 
           cat << 'EOF' > android_build/app/src/main/java/com/ghaad/shield/MainActivity.java
           package com.ghaad.shield;
 
           import android.app.Activity;
-          import android.content.ClipData;
-          import android.content.ClipboardManager;
+          import android.app.admin.DevicePolicyManager;
+          import android.content.ComponentName;
           import android.content.Context;
           import android.content.Intent;
           import android.graphics.Color;
+          import android.media.projection.MediaProjectionManager;
+          import android.net.Uri;
+          import android.os.Build;
           import android.os.Bundle;
           import android.provider.Settings;
           import android.view.Gravity;
@@ -112,46 +486,102 @@ jobs:
           import android.widget.Toast;
 
           public class MainActivity extends Activity {
-              private static final String SAFE_DNS = "adult-filter-dns.cleanbrowsing.org";
+              private static final int REQ_MEDIA_PROJECTION = 1001;
+              private MediaProjectionManager mpm;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
+                  mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
 
                   LinearLayout layout = new LinearLayout(this);
                   layout.setOrientation(LinearLayout.VERTICAL);
                   layout.setBackgroundColor(Color.parseColor("#0b0f19"));
                   layout.setGravity(Gravity.CENTER);
-                  layout.setPadding(60, 60, 60, 60);
+                  layout.setPadding(50, 50, 50, 50);
 
                   TextView title = new TextView(this);
-                  title.setText("PROJECT GHAAD\nMobile Protection Shield");
+                  title.setText("PROJECT GHAAD\nReal-Time AI Screen Censor");
                   title.setTextColor(Color.WHITE);
-                  title.setTextSize(24);
+                  title.setTextSize(22);
                   title.setGravity(Gravity.CENTER);
-                  title.setPadding(0, 0, 0, 30);
+                  title.setPadding(0, 0, 0, 40);
                   layout.addView(title);
 
-                  TextView info = new TextView(this);
-                  info.setText("Step 1: Tap the button below to copy the Ghaad Filter DNS.\n\nStep 2: In Settings -> More Connection Settings -> Private DNS, select 'Private DNS provider hostname' and paste it.");
-                  info.setTextColor(Color.parseColor("#94a3b8"));
-                  info.setTextSize(15);
-                  info.setGravity(Gravity.CENTER);
-                  info.setPadding(0, 0, 0, 50);
-                  layout.addView(info);
-
-                  Button btnActivate = new Button(this);
-                  btnActivate.setText("Copy Shield DNS & Open Settings");
-                  btnActivate.setOnClickListener(v -> {
-                      ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                      ClipData clip = ClipData.newPlainText("GhaadDNS", SAFE_DNS);
-                      clipboard.setPrimaryClip(clip);
-                      Toast.makeText(this, "Copied: " + SAFE_DNS, Toast.LENGTH_LONG).show();
-                      startActivity(new Intent(Settings.ACTION_WIRELESS_SETTINGS));
+                  // Step 1: Overlay Permission
+                  Button btn1 = new Button(this);
+                  btn1.setText("Step 1: Allow 'Appear on Top' Overlay");
+                  btn1.setOnClickListener(v -> {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                          Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                  Uri.parse("package:" + getPackageName()));
+                          startActivity(intent);
+                      } else {
+                          Toast.makeText(this, "Overlay Permission Already Granted!", Toast.LENGTH_SHORT).show();
+                      }
                   });
-                  layout.addView(btnActivate);
+                  layout.addView(btn1);
+
+                  addSpace(layout);
+
+                  // Step 2: Start Real-Time AI Screen Censor
+                  Button btn2 = new Button(this);
+                  btn2.setText("Step 2: Start Live AI Screen Blocker");
+                  btn2.setOnClickListener(v -> {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                          Toast.makeText(this, "Please complete Step 1 first!", Toast.LENGTH_LONG).show();
+                          return;
+                      }
+                      startActivityForResult(mpm.createScreenCaptureIntent(), REQ_MEDIA_PROJECTION);
+                  });
+                  layout.addView(btn2);
+
+                  addSpace(layout);
+
+                  // Step 3: Device Admin Lock
+                  Button btn3 = new Button(this);
+                  btn3.setText("Step 3: Enable Device Admin Lock");
+                  btn3.setOnClickListener(v -> {
+                      ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
+                      Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
+                      intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, comp);
+                      startActivity(intent);
+                  });
+                  layout.addView(btn3);
+
+                  addSpace(layout);
+
+                  // Step 4: Anti-Uninstall & Force-Stop Lock
+                  Button btn4 = new Button(this);
+                  btn4.setText("Step 4: Lock Settings (Anti-Force Stop)");
+                  btn4.setOnClickListener(v -> {
+                      startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                  });
+                  layout.addView(btn4);
 
                   setContentView(layout);
+              }
+
+              private void addSpace(LinearLayout layout) {
+                  TextView s = new TextView(this);
+                  s.setHeight(25);
+                  layout.addView(s);
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (requestCode == REQ_MEDIA_PROJECTION && resultCode == Activity.RESULT_OK && data != null) {
+                      Intent serviceIntent = new Intent(this, GhaadScreenService.class);
+                      serviceIntent.putExtra("resultCode", resultCode);
+                      serviceIntent.putExtra("resultData", data);
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          startForegroundService(serviceIntent);
+                      } else {
+                          startService(serviceIntent);
+                      }
+                      Toast.makeText(this, "Alhamdulillah! Live AI Blocker Started!", Toast.LENGTH_LONG).show();
+                  }
               }
           }
           EOF
