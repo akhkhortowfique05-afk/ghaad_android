@@ -1,4 +1,4 @@
-name: Build Ghaad Android APK
+name: Build Clean Ghaad Android APK
 
 on:
   push:
@@ -20,10 +20,9 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Generate Clean Android Project Structure
+      - name: Generate Play-Protect Safe Android Project
         run: |
           mkdir -p android_build/app/src/main/java/com/ghaad/shield
-          mkdir -p android_build/app/src/main/res/xml
 
           cat << 'EOF' > android_build/settings.gradle
           pluginManagement {
@@ -66,8 +65,8 @@ jobs:
                   applicationId "com.ghaad.shield"
                   minSdk 24
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 2
+                  versionName "2.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -79,9 +78,7 @@ jobs:
           cat << 'EOF' > android_build/app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+              <uses-permission android:name="android.permission.INTERNET"/>
 
               <application
                   android:label="Project Ghaad Shield"
@@ -93,115 +90,17 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
                   </activity>
-
-                  <service android:name=".GhaadGuardService"
-                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-                      android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.accessibilityservice.AccessibilityService"/>
-                      </intent-filter>
-                      <meta-data android:name="android.accessibilityservice"
-                          android:resource="@xml/accessibility_config"/>
-                  </service>
-
-                  <receiver android:name=".GhaadAdminReceiver"
-                      android:permission="android.permission.BIND_DEVICE_ADMIN"
-                      android:exported="true">
-                      <meta-data android:name="android.app.device_admin"
-                          android:resource="@xml/device_admin"/>
-                      <intent-filter>
-                          <action android:name="android.app.action.DEVICE_ADMIN_ENABLED"/>
-                      </intent-filter>
-                  </receiver>
               </application>
           </manifest>
-          EOF
-
-          cat << 'EOF' > android_build/app/src/main/res/xml/accessibility_config.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
-              android:accessibilityFeedbackType="feedbackGeneric"
-              android:canRetrieveWindowContent="true"
-              android:notificationTimeout="50"/>
-          EOF
-
-          cat << 'EOF' > android_build/app/src/main/res/xml/device_admin.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-policies><force-lock/></uses-policies>
-          </device-admin>
-          EOF
-
-          cat << 'EOF' > android_build/app/src/main/java/com/ghaad/shield/GhaadAdminReceiver.java
-          package com.ghaad.shield;
-          import android.app.admin.DeviceAdminReceiver;
-          public class GhaadAdminReceiver extends DeviceAdminReceiver {}
-          EOF
-
-          cat << 'EOF' > android_build/app/src/main/java/com/ghaad/shield/GhaadGuardService.java
-          package com.ghaad.shield;
-
-          import android.accessibilityservice.AccessibilityService;
-          import android.view.accessibility.AccessibilityEvent;
-          import android.view.accessibility.AccessibilityNodeInfo;
-
-          public class GhaadGuardService extends AccessibilityService {
-              private static final String[] BLOCKED_KEYWORDS = {
-                  "porn", "xvideos", "xnxx", "pornhub", "xhamster", "nsfw", "xxx", "nude", "sex video", "brazzers", "onlyfans", "18+", "adult video"
-              };
-
-              @Override
-              public void onAccessibilityEvent(AccessibilityEvent event) {
-                  if (event == null) return;
-                  AccessibilityNodeInfo root = getRootInActiveWindow();
-                  if (root == null) return;
-
-                  String pkg = event.getPackageName() != null ? event.getPackageName().toString().toLowerCase() : "";
-                  String screenText = collectText(root).toLowerCase();
-
-                  if (pkg.contains("settings") || pkg.contains("packageinstaller") || pkg.contains("securitycenter")) {
-                      if (screenText.contains("project ghaad") || screenText.contains("ghaad shield")) {
-                          performGlobalAction(GLOBAL_ACTION_BACK);
-                          performGlobalAction(GLOBAL_ACTION_HOME);
-                          return;
-                      }
-                  }
-
-                  if (!pkg.contains("com.ghaad.shield")) {
-                      for (String word : BLOCKED_KEYWORDS) {
-                          if (screenText.contains(word)) {
-                              performGlobalAction(GLOBAL_ACTION_BACK);
-                              performGlobalAction(GLOBAL_ACTION_HOME);
-                              return;
-                          }
-                      }
-                  }
-              }
-
-              private String collectText(AccessibilityNodeInfo node) {
-                  if (node == null) return "";
-                  StringBuilder sb = new StringBuilder();
-                  if (node.getText() != null) sb.append(node.getText()).append(" ");
-                  if (node.getContentDescription() != null) sb.append(node.getContentDescription()).append(" ");
-                  int count = node.getChildCount();
-                  for (int i = 0; i < count; i++) {
-                      sb.append(collectText(node.getChild(i)));
-                  }
-                  return sb.toString();
-              }
-
-              @Override
-              public void onInterrupt() {}
-          }
           EOF
 
           cat << 'EOF' > android_build/app/src/main/java/com/ghaad/shield/MainActivity.java
           package com.ghaad.shield;
 
           import android.app.Activity;
-          import android.app.admin.DevicePolicyManager;
-          import android.content.ComponentName;
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
+          import android.content.Context;
           import android.content.Intent;
           import android.graphics.Color;
           import android.os.Bundle;
@@ -210,8 +109,11 @@ jobs:
           import android.widget.Button;
           import android.widget.LinearLayout;
           import android.widget.TextView;
+          import android.widget.Toast;
 
           public class MainActivity extends Activity {
+              private static final String SAFE_DNS = "adult-filter-dns.cleanbrowsing.org";
+
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
@@ -223,33 +125,31 @@ jobs:
                   layout.setPadding(60, 60, 60, 60);
 
                   TextView title = new TextView(this);
-                  title.setText("PROJECT GHAAD\nPermanent Mobile Shield");
+                  title.setText("PROJECT GHAAD\nMobile Protection Shield");
                   title.setTextColor(Color.WHITE);
                   title.setTextSize(24);
                   title.setGravity(Gravity.CENTER);
-                  title.setPadding(0, 0, 0, 60);
+                  title.setPadding(0, 0, 0, 30);
                   layout.addView(title);
 
-                  Button btnAdmin = new Button(this);
-                  btnAdmin.setText("Step 1: Enable Anti-Uninstall Lock");
-                  btnAdmin.setOnClickListener(v -> {
-                      ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
-                      Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
-                      intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, comp);
-                      startActivity(intent);
-                  });
-                  layout.addView(btnAdmin);
+                  TextView info = new TextView(this);
+                  info.setText("Step 1: Tap the button below to copy the Ghaad Filter DNS.\n\nStep 2: In Settings -> More Connection Settings -> Private DNS, select 'Private DNS provider hostname' and paste it.");
+                  info.setTextColor(Color.parseColor("#94a3b8"));
+                  info.setTextSize(15);
+                  info.setGravity(Gravity.CENTER);
+                  info.setPadding(0, 0, 0, 50);
+                  layout.addView(info);
 
-                  TextView spacer = new TextView(this);
-                  spacer.setHeight(40);
-                  layout.addView(spacer);
-
-                  Button btnGuard = new Button(this);
-                  btnGuard.setText("Step 2: Activate Permanent AI Guard");
-                  btnGuard.setOnClickListener(v -> {
-                      startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                  Button btnActivate = new Button(this);
+                  btnActivate.setText("Copy Shield DNS & Open Settings");
+                  btnActivate.setOnClickListener(v -> {
+                      ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                      ClipData clip = ClipData.newPlainText("GhaadDNS", SAFE_DNS);
+                      clipboard.setPrimaryClip(clip);
+                      Toast.makeText(this, "Copied: " + SAFE_DNS, Toast.LENGTH_LONG).show();
+                      startActivity(new Intent(Settings.ACTION_WIRELESS_SETTINGS));
                   });
-                  layout.addView(btnGuard);
+                  layout.addView(btnActivate);
 
                   setContentView(layout);
               }
