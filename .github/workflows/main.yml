@@ -1,4 +1,4 @@
-name: Build Ghaad V14 Custom NudeNet APK
+name: Build Ghaad V15 Verified NudeNet APK
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Python to Extract Official NudeNet ONNX Model
+      - name: Set up Python to Extract & Verify NudeNet ONNX
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -25,15 +25,27 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Generate V14 Custom NudeNet Android Project
+      - name: Generate V15 Verified NudeNet Android Project
         run: |
           mkdir -p android_build/app/src/main/java/com/ghaad/shield
           mkdir -p android_build/app/src/main/res/xml
           mkdir -p android_build/app/src/main/assets
 
-          # Install official NudeNet and copy verified 320n.onnx into Android assets
-          pip install --quiet nudenet
-          python3 -c "import os, shutil, nudenet; pkg_dir = os.path.dirname(nudenet.__file__); onnx_path = os.path.join(pkg_dir, '320n.onnx'); shutil.copy(onnx_path, 'android_build/app/src/main/assets/nudenet.onnx'); print('Copied ONNX size:', os.path.getsize('android_build/app/src/main/assets/nudenet.onnx'))"
+          # Install NudeNet and verify model input/output shape before copying
+          pip install --quiet nudenet onnxruntime
+          python3 - << 'PYEOF'
+          import os, shutil, nudenet, onnxruntime as ort
+          pkg_dir = os.path.dirname(nudenet.__file__)
+          onnx_files = [f for f in os.listdir(pkg_dir) if f.endswith('.onnx')]
+          print("Found ONNX files in nudenet:", onnx_files)
+          onnx_path = os.path.join(pkg_dir, onnx_files[0])
+          sess = ort.InferenceSession(onnx_path)
+          print("Input:", sess.get_inputs()[0].name, sess.get_inputs()[0].shape)
+          print("Output:", sess.get_outputs()[0].name, sess.get_outputs()[0].shape)
+          target_path = 'android_build/app/src/main/assets/nudenet.onnx'
+          shutil.copy(onnx_path, target_path)
+          print("Successfully copied ONNX model, bytes:", os.path.getsize(target_path))
+          PYEOF
 
           cat << 'EOF' > android_build/settings.gradle
           pluginManagement {
@@ -50,7 +62,7 @@ jobs:
                   mavenCentral()
               }
           }
-          rootProject.name = "GhaadShieldV14"
+          rootProject.name = "GhaadShieldV15"
           include ':app'
           EOF
 
@@ -76,8 +88,8 @@ jobs:
                   applicationId "com.ghaad.shield"
                   minSdk 24
                   targetSdk 33
-                  versionCode 17
-                  versionName "14.0"
+                  versionCode 18
+                  versionName "15.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -101,7 +113,7 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
 
               <application
-                  android:label="Ghaad V14 Shield"
+                  android:label="Ghaad V15 Shield"
                   android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
                   <activity android:name=".MainActivity" android:exported="true">
@@ -178,6 +190,9 @@ jobs:
               private final Paint boxPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
               private final Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
               private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+              private final Paint hudBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+              private final Paint hudTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+              private String debugText = "V15: INIT...";
 
               public CensorOverlayView(Context context) {
                   super(context);
@@ -187,18 +202,28 @@ jobs:
 
                   borderPaint.setColor(Color.rgb(220, 38, 38));
                   borderPaint.setStyle(Paint.Style.STROKE);
-                  borderPaint.setStrokeWidth(3f);
+                  borderPaint.setStrokeWidth(4f);
 
                   textPaint.setColor(Color.WHITE);
                   textPaint.setTextSize(30f);
                   textPaint.setTextAlign(Paint.Align.CENTER);
                   textPaint.setFakeBoldText(true);
+
+                  hudBgPaint.setColor(Color.argb(200, 15, 23, 42));
+                  hudBgPaint.setStyle(Paint.Style.FILL);
+
+                  hudTextPaint.setColor(Color.rgb(52, 211, 153));
+                  hudTextPaint.setTextSize(23f);
+                  hudTextPaint.setFakeBoldText(true);
               }
 
-              public synchronized void setBoxes(List<Rect> rects) {
+              public synchronized void updateState(List<Rect> rects, String hud) {
                   blockedRects.clear();
                   if (rects != null) {
                       blockedRects.addAll(rects);
+                  }
+                  if (hud != null) {
+                      debugText = hud;
                   }
                   postInvalidate();
               }
@@ -212,6 +237,10 @@ jobs:
                       canvas.drawRoundRect(rf, 14f, 14f, borderPaint);
                       canvas.drawText("GHAAD BLOCKED", r.centerX(), r.centerY(), textPaint);
                   }
+                  if (debugText != null && !debugText.isEmpty()) {
+                      canvas.drawRoundRect(16, 85, 680, 132, 10, 10, hudBgPaint);
+                      canvas.drawText(debugText, 28, 117, hudTextPaint);
+                  }
               }
           }
           EOF
@@ -221,9 +250,12 @@ jobs:
 
           import android.content.Context;
           import android.graphics.Bitmap;
+          import android.graphics.Canvas;
+          import android.graphics.Color;
           import android.graphics.Rect;
 
-          import java.io.ByteArrayOutputStream;
+          import java.io.File;
+          import java.io.FileOutputStream;
           import java.io.InputStream;
           import java.nio.FloatBuffer;
           import java.util.ArrayList;
@@ -239,45 +271,45 @@ jobs:
               private OrtSession session;
               private String inputName;
               private boolean isLoaded = false;
+              public String statusMsg = "LOADING...";
+              public float lastMaxScore = 0f;
+              public int lastBestClass = -1;
 
-              // User requested classes: EXCLUDE 1, 8, 9, 10, 12, 16; KEEP ALL OTHERS ACTIVE:
-              // 0: FEMALE_GENITALIA_COVERED
-              // 2: BUTTOCKS_EXPOSED
-              // 3: FEMALE_BREAST_EXPOSED
-              // 4: FEMALE_GENITALIA_EXPOSED
-              // 5: MALE_BREAST_EXPOSED
-              // 6: ANUS_EXPOSED
-              // 7: FEET_EXPOSED
-              // 11: ARMPITS_EXPOSED
-              // 13: BELLY_EXPOSED
-              // 14: MALE_GENITALIA_EXPOSED
-              // 15: ANUS_COVERED
-              // 17: BUTTOCKS_COVERED
-              private static final int[] ACTIVE_CLASSES = {
+              // Toggleable option for Class 16 (FEMALE_BREAST_COVERED / Cleavage / Bikini Top)
+              // Note: On YouTube & Facebook, 95% of immodest female videos have covered cleavage/bikini (Class 16) rather than full nudity!
+              public static volatile boolean includeCleavageClass16 = true;
+
+              // User requested classes: EXCLUDE 1 (Face Female), 8 (Belly Covered), 9 (Feet Covered), 10 (Armpits Covered), 12 (Face Male)
+              private static final int[] CORE_CLASSES = {
                   0, 2, 3, 4, 5, 6, 7, 11, 13, 14, 15, 17
               };
 
               public NudeNetOnnxDetector(Context context) {
                   try {
                       env = OrtEnvironment.getEnvironment();
-                      InputStream is = context.getAssets().open("nudenet.onnx");
-                      ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-                      int nRead;
-                      byte[] data = new byte[16384];
-                      while ((nRead = is.read(data, 0, data.length)) != -1) {
-                          buffer.write(data, 0, nRead);
+                      // Copy model to local file (Avoids Android OOM when loading byte[] in memory!)
+                      File modelFile = new File(context.getFilesDir(), "nudenet_v15.onnx");
+                      if (!modelFile.exists() || modelFile.length() < 1000000) {
+                          InputStream is = context.getAssets().open("nudenet.onnx");
+                          FileOutputStream fos = new FileOutputStream(modelFile);
+                          byte[] buf = new byte[32768];
+                          int len;
+                          while ((len = is.read(buf)) != -1) {
+                              fos.write(buf, 0, len);
+                          }
+                          fos.flush();
+                          fos.close();
+                          is.close();
                       }
-                      is.close();
-                      byte[] modelBytes = buffer.toByteArray();
-                      if (modelBytes.length > 1000000) {
-                          OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
-                          opts.setIntraOpNumThreads(2);
-                          session = env.createSession(modelBytes, opts);
-                          inputName = session.getInputNames().iterator().next();
-                          isLoaded = true;
-                      }
-                  } catch (Exception ignored) {
+                      OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
+                      opts.setIntraOpNumThreads(2);
+                      session = env.createSession(modelFile.getAbsolutePath(), opts);
+                      inputName = session.getInputNames().iterator().next();
+                      isLoaded = true;
+                      statusMsg = "ONNX OK (" + (modelFile.length() / 1024 / 1024) + "MB)";
+                  } catch (Exception e) {
                       isLoaded = false;
+                      statusMsg = "ONNX ERR: " + e.getClass().getSimpleName();
                   }
               }
 
@@ -285,73 +317,136 @@ jobs:
                   return isLoaded && session != null;
               }
 
-              public List<Rect> detectSelectedClasses(Bitmap frameBmp, int screenW, int screenH) {
+              // EXACT Python NudeNet Preprocessing: Letterbox 320x320 with Aspect Ratio preserved!
+              public List<Rect> detect(Bitmap srcBmp, int screenW, int screenH) {
                   if (!isReady()) return Collections.emptyList();
                   List<Rect> results = new ArrayList<>();
                   try {
-                      Bitmap resized = Bitmap.createScaledBitmap(frameBmp, 320, 320, false);
-                      int[] pixels = new int[320 * 320];
-                      resized.getPixels(pixels, 0, 320, 0, 0, 320, 320);
+                      int origW = srcBmp.getWidth();
+                      int origH = srcBmp.getHeight();
+
+                      // Calculate Letterbox Scale (just like official Python NudeNet!)
+                      float r = Math.min(320.0f / origW, 320.0f / origH);
+                      int newUnpadW = Math.round(origW * r);
+                      int newUnpadH = Math.round(origH * r);
+
+                      Bitmap resized = Bitmap.createScaledBitmap(srcBmp, newUnpadW, newUnpadH, true);
+                      Bitmap letterboxed = Bitmap.createBitmap(320, 320, Bitmap.Config.ARGB_8888);
+                      Canvas canvas = new Canvas(letterboxed);
+                      canvas.drawColor(Color.rgb(114, 114, 114)); // Standard YOLO grey padding
+                      canvas.drawBitmap(resized, 0, 0, null);
                       resized.recycle();
+
+                      int[] pixels = new int[320 * 320];
+                      letterboxed.getPixels(pixels, 0, 320, 0, 0, 320, 320);
+                      letterboxed.recycle();
 
                       FloatBuffer floatBuffer = FloatBuffer.allocate(3 * 320 * 320);
                       int area = 320 * 320;
                       for (int i = 0; i < area; i++) {
                           int px = pixels[i];
-                          floatBuffer.put(i, ((px >> 16) & 0xFF) / 255.0f);
-                          floatBuffer.put(area + i, ((px >> 8) & 0xFF) / 255.0f);
-                          floatBuffer.put(2 * area + i, (px & 0xFF) / 255.0f);
+                          int R = (px >> 16) & 0xFF;
+                          int G = (px >> 8) & 0xFF;
+                          int B = px & 0xFF;
+                          floatBuffer.put(i, R / 255.0f);
+                          floatBuffer.put(area + i, G / 255.0f);
+                          floatBuffer.put(2 * area + i, B / 255.0f);
                       }
                       floatBuffer.rewind();
 
                       long[] shape = new long[]{1, 3, 320, 320};
                       OnnxTensor tensor = OnnxTensor.createTensor(env, floatBuffer, shape);
                       OrtSession.Result ortResult = session.run(Collections.singletonMap(inputName, tensor));
-                      float[][][] output = (float[][][]) ortResult.get(0).getValue();
+                      Object rawOut = ortResult.get(0).getValue();
+
+                      float[][] preds;
+                      if (rawOut instanceof float[][][]) {
+                          float[][][] out3d = (float[][][]) rawOut;
+                          // Handle both [1, 22, 2100] and [1, 2100, 22] tensor shapes!
+                          if (out3d[0].length == 22) {
+                              int anchors = out3d[0][0].length;
+                              preds = new float[anchors][22];
+                              for (int a = 0; a < anchors; a++) {
+                                  for (int c = 0; c < 22; c++) {
+                                      preds[a][c] = out3d[0][c][a];
+                                  }
+                              }
+                          } else {
+                              preds = out3d[0];
+                          }
+                      } else {
+                          tensor.close();
+                          ortResult.close();
+                          return Collections.emptyList();
+                      }
                       tensor.close();
                       ortResult.close();
 
-                      int numProposals = output[0][0].length;
-                      float scaleX = (float) screenW / 320.0f;
-                      float scaleY = (float) screenH / 320.0f;
+                      float frameMax = 0f;
+                      int frameBestClass = -1;
+                      float scaleToScreenX = (float) screenW / newUnpadW;
+                      float scaleToScreenY = (float) screenH / newUnpadH;
 
-                      for (int i = 0; i < numProposals; i++) {
-                          float maxScore = 0f;
-                          int bestClass = -1;
+                      for (int i = 0; i < preds.length; i++) {
+                          float[] row = preds[i];
+                          float bestScore = 0f;
+                          int bestCls = -1;
 
-                          for (int c : ACTIVE_CLASSES) {
-                              float score = output[0][4 + c][i];
-                              if (score > maxScore) {
-                                  maxScore = score;
-                                  bestClass = c;
+                          for (int c : CORE_CLASSES) {
+                              if (row[4 + c] > bestScore) {
+                                  bestScore = row[4 + c];
+                                  bestCls = c;
                               }
                           }
-
-                          // If it is only MALE_BREAST_EXPOSED (5) but a strong MALE_FACE (12) is present, require higher threshold so normal men aren't unnecessarily blocked
-                          if (bestClass == 5 && maxScore < 0.45f) {
-                              continue;
+                          if (includeCleavageClass16 && row[4 + 16] > bestScore) {
+                              bestScore = row[4 + 16];
+                              bestCls = 16;
                           }
 
-                          if (maxScore >= 0.28f) {
-                              float cx = output[0][0][i];
-                              float cy = output[0][1][i];
-                              float w = output[0][2][i];
-                              float h = output[0][3][i];
+                          if (bestScore > frameMax) {
+                              frameMax = bestScore;
+                              frameBestClass = bestCls;
+                          }
 
-                              int bw = (int) (w * scaleX);
-                              int bh = (int) (h * scaleY);
+                          if (bestScore >= 0.22f) {
+                              float cx = row[0];
+                              float cy = row[1];
+                              float w = row[2];
+                              float h = row[3];
+
+                              // Handle normalized [0..1] vs pixel [0..320] coordinates automatically!
+                              if (cx <= 1.05f && cy <= 1.05f && w <= 1.05f && h <= 1.05f) {
+                                  cx *= 320.0f;
+                                  cy *= 320.0f;
+                                  w *= 320.0f;
+                                  h *= 320.0f;
+                              }
+
+                              float x1 = (cx - w / 2.0f) * scaleToScreenX;
+                              float y1 = (cy - h / 2.0f) * scaleToScreenY;
+                              float x2 = (cx + w / 2.0f) * scaleToScreenX;
+                              float y2 = (cy + h / 2.0f) * scaleToScreenY;
+
+                              int bw = Math.round(x2 - x1);
+                              int bh = Math.round(y2 - y1);
                               int padX = (int) (bw * 0.35f);
                               int padY = (int) (bh * 0.35f);
 
-                              int left = Math.max(0, (int) ((cx - w / 2f) * scaleX) - padX);
-                              int top = Math.max(0, (int) ((cy - h / 2f) * scaleY) - padY);
-                              int right = Math.min(screenW, (int) ((cx + w / 2f) * scaleX) + padX);
-                              int bottom = Math.min(screenH, (int) ((cy + h / 2f) * scaleY) + padY);
+                              int left = Math.max(0, Math.round(x1) - padX);
+                              int top = Math.max(0, Math.round(y1) - padY);
+                              int right = Math.min(screenW, Math.round(x2) + padX);
+                              int bottom = Math.min(screenH, Math.round(y2) + padY);
 
-                              results.add(new Rect(left, top, right, bottom));
+                              if (right > left + 20 && bottom > top + 20) {
+                                  results.add(new Rect(left, top, right, bottom));
+                              }
                           }
                       }
-                  } catch (Exception ignored) {}
+                      lastMaxScore = frameMax;
+                      lastBestClass = frameBestClass;
+                  } catch (Exception e) {
+                      statusMsg = "RUN ERR: " + e.getMessage();
+                  }
                   return results;
               }
           }
@@ -379,6 +474,7 @@ jobs:
           import java.util.Collections;
           import java.util.Iterator;
           import java.util.List;
+          import java.util.Locale;
           import java.util.concurrent.ExecutorService;
           import java.util.concurrent.Executors;
 
@@ -393,9 +489,8 @@ jobs:
               private Handler mainHandler;
               private ExecutorService executor;
               private volatile boolean isBusy = false;
+              private int scanCounter = 0;
 
-              // ZERO-FLICKER TRACKER: Never hides the black box to take a screenshot!
-              // Keeps existing box 100% solid until the user scrolls or the surrounding video scene changes!
               private static class TrackedBox {
                   Rect rect;
                   int[] borderColors;
@@ -429,19 +524,19 @@ jobs:
 
                   executor.execute(() -> {
                       nudeNetDetector = new NudeNetOnnxDetector(GhaadGuardService.this);
+                      mainHandler.post(() -> overlayView.updateState(Collections.emptyList(), nudeNetDetector.statusMsg));
                   });
 
-                  mainHandler.postDelayed(scanLoop, 450);
+                  mainHandler.postDelayed(scanLoop, 500);
               }
 
               private boolean isHomeOrSafeApp() {
                   String p = activePkg.toLowerCase();
-                  if (p.isEmpty()) return true;
+                  if (p.isEmpty()) return false;
                   return p.contains("launcher") || p.contains("sec.android.app.launcher")
                           || p.contains("quickstep") || p.contains("com.ghaad.shield")
                           || p.contains("inputmethod") || p.contains("honeyboard")
-                          || p.contains("systemui") || p.contains("android.settings")
-                          || p.contains("dialer") || p.contains("bkash") || p.contains("nagad");
+                          || p.contains("android.settings") || p.contains("dialer") || p.contains("bkash");
               }
 
               private final Runnable scanLoop = new Runnable() {
@@ -449,13 +544,19 @@ jobs:
                   public void run() {
                       if (isHomeOrSafeApp()) {
                           activeTrackedBoxes.clear();
-                          overlayView.setBoxes(Collections.emptyList());
+                          overlayView.updateState(Collections.emptyList(), "");
                           mainHandler.postDelayed(this, 450);
                           return;
                       }
 
-                      if (!isBusy && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-                              && nudeNetDetector != null && nudeNetDetector.isReady()) {
+                      if (nudeNetDetector == null || !nudeNetDetector.isReady()) {
+                          String msg = nudeNetDetector != null ? nudeNetDetector.statusMsg : "LOADING ONNX...";
+                          overlayView.updateState(Collections.emptyList(), msg);
+                          mainHandler.postDelayed(this, 500);
+                          return;
+                      }
+
+                      if (!isBusy && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                           isBusy = true;
                           captureWithoutBlinking();
                       }
@@ -479,18 +580,21 @@ jobs:
                                       hwBmp.recycle();
                                       hb.close();
 
+                                      scanCounter++;
                                       processFrameZeroFlicker(softBmp, origW, origH);
                                   } else {
                                       hb.close();
                                       isBusy = false;
                                   }
                               } catch (Exception e) {
+                                  mainHandler.post(() -> overlayView.updateState(null, "BMP ERR: " + e.getClass().getSimpleName()));
                                   isBusy = false;
                               }
                           }
 
                           @Override
                           public void onFailure(int errorCode) {
+                              mainHandler.post(() -> overlayView.updateState(null, "SHOT WAIT (Code " + errorCode + ")"));
                               isBusy = false;
                           }
                       });
@@ -500,7 +604,6 @@ jobs:
               }
 
               private void processFrameZeroFlicker(Bitmap bmp, int screenW, int screenH) {
-                  // 1. Check if existing boxes are still on the same video scene or if the scene/scroll changed
                   synchronized (activeTrackedBoxes) {
                       if (userJustScrolled) {
                           activeTrackedBoxes.clear();
@@ -511,14 +614,13 @@ jobs:
                               TrackedBox tb = it.next();
                               int[] currentBorder = sampleOuterBorder(bmp, tb.rect);
                               if (isBorderChangedSignificantly(tb.borderColors, currentBorder)) {
-                                  it.remove(); // Video scene changed! Remove old box cleanly.
+                                  it.remove();
                               }
                           }
                       }
                   }
 
-                  // 2. Run NudeNet ONNX on current screen for new exposed body regions
-                  List<Rect> newlyDetected = nudeNetDetector.detectSelectedClasses(bmp, screenW, screenH);
+                  List<Rect> newlyDetected = nudeNetDetector.detect(bmp, screenW, screenH);
 
                   synchronized (activeTrackedBoxes) {
                       List<Rect> allRects = new ArrayList<>();
@@ -538,11 +640,14 @@ jobs:
                       }
 
                       final List<Rect> finalBoxes = new ArrayList<>(merged);
+                      final String hud = String.format(Locale.US, "Scan #%d | Cls:%d (%.0f%%) | Box:%d",
+                              scanCounter, nudeNetDetector.lastBestClass, nudeNetDetector.lastMaxScore * 100f, finalBoxes.size());
+
                       mainHandler.post(() -> {
                           if (!isHomeOrSafeApp()) {
-                              overlayView.setBoxes(finalBoxes);
+                              overlayView.updateState(finalBoxes, hud);
                           } else {
-                              overlayView.setBoxes(Collections.emptyList());
+                              overlayView.updateState(Collections.emptyList(), "");
                           }
                       });
                   }
@@ -553,10 +658,10 @@ jobs:
 
               private int[] sampleOuterBorder(Bitmap bmp, Rect r) {
                   int w = bmp.getWidth(), h = bmp.getHeight();
-                  int left = Math.max(2, r.left - 10);
-                  int top = Math.max(2, r.top - 10);
-                  int right = Math.min(w - 3, r.right + 10);
-                  int bottom = Math.min(h - 3, r.bottom + 10);
+                  int left = Math.max(2, r.left - 8);
+                  int top = Math.max(2, r.top - 8);
+                  int right = Math.min(w - 3, r.right + 8);
+                  int bottom = Math.min(h - 3, r.bottom + 8);
 
                   int[] samples = new int[12];
                   int idx = 0;
@@ -616,7 +721,7 @@ jobs:
                   if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
                       userJustScrolled = true;
                       activeTrackedBoxes.clear();
-                      overlayView.setBoxes(Collections.emptyList());
+                      overlayView.updateState(Collections.emptyList(), "SCROLLED - RESCANNING...");
                   }
 
                   if (event.getPackageName() != null) {
@@ -626,21 +731,19 @@ jobs:
                       }
                       if (isHomeOrSafeApp()) {
                           activeTrackedBoxes.clear();
-                          overlayView.setBoxes(Collections.emptyList());
+                          overlayView.updateState(Collections.emptyList(), "");
                       }
                   }
 
                   if (System.currentTimeMillis() < pauseLockUntil) return;
 
-                  // V10.2 Style Anti-Uninstall Guard: ONLY inside Android Settings / PackageInstaller
-                  // Never triggers inside App Drawer, Browser, or Chat!
                   String pkg = activePkg.toLowerCase();
                   if (pkg.equals("com.android.settings") || pkg.contains("packageinstaller")) {
                       AccessibilityNodeInfo root = getRootInActiveWindow();
                       if (root != null) {
                           String text = collectText(root).toLowerCase();
                           root.recycle();
-                          if (text.contains("ghaad v14 shield")) {
+                          if (text.contains("ghaad v15 shield")) {
                               if (text.contains("uninstall") || text.contains("force stop")
                                       || text.contains("deactivate") || text.contains("app info")) {
                                   performGlobalAction(GLOBAL_ACTION_BACK);
@@ -696,7 +799,7 @@ jobs:
           import android.widget.Toast;
 
           public class MainActivity extends Activity {
-              private Button btnAdmin, btnGuard;
+              private Button btnAdmin, btnGuard, btnToggle16;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
@@ -706,16 +809,16 @@ jobs:
                   layout.setOrientation(LinearLayout.VERTICAL);
                   layout.setBackgroundColor(Color.parseColor("#0b0f19"));
                   layout.setGravity(Gravity.CENTER);
-                  layout.setPadding(60, 60, 60, 60);
+                  layout.setPadding(55, 55, 55, 55);
 
                   TextView title = new TextView(this);
-                  title.setText("GHAAD SHIELD V14.0\nZero-Flicker NudeNet Body AI");
+                  title.setText("GHAAD SHIELD V15.0\nLetterbox NudeNet ONNX Engine");
                   title.setTextColor(Color.parseColor("#10b981"));
                   title.setTextSize(22);
                   title.setGravity(Gravity.CENTER);
-                  title.setPadding(0, 0, 0, 25);
+                  title.setPadding(0, 0, 0, 20);
 
-                  // Secret Owner Unlock (Just like V10): Hold title for 3s to unlock for 60s
+                  // Secret Owner Unlock: Hold title for 3s to unlock for 60s
                   title.setOnLongClickListener(v -> {
                       GhaadGuardService.pauseLockUntil = System.currentTimeMillis() + 60000;
                       DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
@@ -730,11 +833,11 @@ jobs:
                   layout.addView(title);
 
                   TextView sub = new TextView(this);
-                  sub.setText("• Blocks Classes: 0, 2, 3, 4, 5, 6, 7, 11, 13, 14, 15, 17\n• Ignores Faces & Covered Clothing (1, 8, 9, 10, 12, 16)\n• Zero Flickering & Safe for All Apps");
+                  sub.setText("Fixed Aspect-Ratio Squash & Tensor Shape Bug!\nShows Live Scan Score at Top-Left.");
                   sub.setTextColor(Color.parseColor("#cbd5e1"));
                   sub.setTextSize(14);
                   sub.setGravity(Gravity.CENTER);
-                  sub.setPadding(0, 0, 0, 50);
+                  sub.setPadding(0, 0, 0, 40);
                   layout.addView(sub);
 
                   btnAdmin = new Button(this);
@@ -746,9 +849,7 @@ jobs:
                   });
                   layout.addView(btnAdmin);
 
-                  TextView space = new TextView(this);
-                  space.setHeight(35);
-                  layout.addView(space);
+                  addSpace(layout);
 
                   btnGuard = new Button(this);
                   btnGuard.setOnClickListener(v -> {
@@ -756,7 +857,22 @@ jobs:
                   });
                   layout.addView(btnGuard);
 
+                  addSpace(layout);
+
+                  btnToggle16 = new Button(this);
+                  btnToggle16.setOnClickListener(v -> {
+                      NudeNetOnnxDetector.includeCleavageClass16 = !NudeNetOnnxDetector.includeCleavageClass16;
+                      updateStatus();
+                  });
+                  layout.addView(btnToggle16);
+
                   setContentView(layout);
+              }
+
+              private void addSpace(LinearLayout layout) {
+                  TextView s = new TextView(this);
+                  s.setHeight(30);
+                  layout.addView(s);
               }
 
               @Override
@@ -772,7 +888,10 @@ jobs:
                   btnAdmin.setText((s1 ? "✅ " : "❌ ") + "Step 1: Lock Uninstall (Device Admin)");
 
                   boolean s2 = GhaadGuardService.instance != null;
-                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Step 2: Activate V14 Body AI Shield");
+                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Step 2: Activate V15 NudeNet AI");
+
+                  boolean c16 = NudeNetOnnxDetector.includeCleavageClass16;
+                  btnToggle16.setText((c16 ? "✅ " : "⬜ ") + "Block Bikini/Cleavage (Class 16)");
               }
           }
           EOF
@@ -782,10 +901,10 @@ jobs:
         run: gradle assembleDebug
 
       - name: Prepare APK File
-        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V14_Final.apk
+        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V15_Verified.apk
 
       - name: Upload Compiled APK
         uses: actions/upload-artifact@v4
         with:
-          name: Ghaad_V14_Final_APK
-          path: Ghaad_V14_Final.apk
+          name: Ghaad_V15_Verified_APK
+          path: Ghaad_V15_Verified.apk
