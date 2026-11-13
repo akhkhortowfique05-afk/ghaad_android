@@ -1,4 +1,4 @@
-name: Build Ghaad V19 Body-Shape Silhouette APK
+name: Build Ghaad V20 Non-Stop Silhouette APK
 
 on:
   push:
@@ -25,7 +25,7 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Generate V19 Body-Shape Silhouette Android Project
+      - name: Generate V20 Non-Stop Silhouette Android Project
         run: |
           mkdir -p android_build/app/src/main/java/com/ghaad/shield
           mkdir -p android_build/app/src/main/res/xml
@@ -69,7 +69,7 @@ jobs:
                   mavenCentral()
               }
           }
-          rootProject.name = "GhaadShieldV19"
+          rootProject.name = "GhaadShieldV20"
           include ':app'
           EOF
 
@@ -95,8 +95,8 @@ jobs:
                   applicationId "com.ghaad.shield"
                   minSdk 24
                   targetSdk 33
-                  versionCode 27
-                  versionName "19.1"
+                  versionCode 28
+                  versionName "20.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -109,7 +109,6 @@ jobs:
           dependencies {
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'com.google.mlkit:segmentation-selfie:16.0.0-beta5'
-              implementation 'com.google.mlkit:face-detection:16.1.6'
               implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.19.2'
           }
           EOF
@@ -122,12 +121,8 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
 
               <application
-                  android:label="Ghaad V19 Silhouette"
+                  android:label="Ghaad V20 Silhouette"
                   android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
-
-                  <meta-data
-                      android:name="com.google.mlkit.vision.DEPENDENCIES"
-                      android:value="face"/>
 
                   <activity android:name=".MainActivity" android:exported="true">
                       <intent-filter>
@@ -138,7 +133,8 @@ jobs:
 
                   <service android:name=".GhaadGuardService"
                       android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-                      android:exported="true">
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
                       <intent-filter>
                           <action android:name="android.accessibilityservice.AccessibilityService"/>
                       </intent-filter>
@@ -152,10 +148,11 @@ jobs:
           cat << 'EOF' > android_build/app/src/main/res/xml/accessibility_config.xml
           <?xml version="1.0" encoding="utf-8"?>
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-              android:accessibilityEventTypes="typeWindowStateChanged"
+              android:accessibilityEventTypes="typeWindowStateChanged|typeViewScrolled"
               android:accessibilityFeedbackType="feedbackGeneric"
-              android:canRetrieveWindowContent="false"
+              android:canRetrieveWindowContent="true"
               android:canTakeScreenshot="true"
+              android:accessibilityFlags="flagRetrieveInteractiveWindows"
               android:notificationTimeout="40"/>
           EOF
 
@@ -175,7 +172,7 @@ jobs:
 
           public class SilhouetteOverlayView extends View {
               private Bitmap bodyMaskBitmap = null;
-              private final List<Rect> extraContours = new ArrayList<>();
+              private final List<Rect> silhouettes = new ArrayList<>();
               private final Paint bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
               private final Paint silhouettePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
               private final Paint badgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -193,14 +190,14 @@ jobs:
                   badgePaint.setFakeBoldText(true);
               }
 
-              public synchronized void updateSilhouette(Bitmap newMask, List<Rect> extraBodies, String status) {
+              public synchronized void updateSilhouette(Bitmap newMask, List<Rect> targets, String status) {
                   if (bodyMaskBitmap != null && bodyMaskBitmap != newMask) {
                       bodyMaskBitmap.recycle();
                   }
                   bodyMaskBitmap = newMask;
-                  extraContours.clear();
-                  if (extraBodies != null) {
-                      extraContours.addAll(extraBodies);
+                  silhouettes.clear();
+                  if (targets != null) {
+                      silhouettes.addAll(targets);
                   }
                   statusText = status != null ? status : "";
                   postInvalidate();
@@ -211,13 +208,9 @@ jobs:
                       bodyMaskBitmap.recycle();
                       bodyMaskBitmap = null;
                   }
-                  extraContours.clear();
+                  silhouettes.clear();
                   statusText = "";
                   postInvalidate();
-              }
-
-              public synchronized boolean hasActiveMask() {
-                  return bodyMaskBitmap != null || !extraContours.isEmpty();
               }
 
               @Override
@@ -231,12 +224,12 @@ jobs:
                       canvas.drawBitmap(bodyMaskBitmap, null, destRect, bitmapPaint);
                   }
 
-                  for (Rect r : extraContours) {
+                  for (Rect r : silhouettes) {
                       drawHumanSilhouetteShape(canvas, r);
                   }
 
                   if (!statusText.isEmpty()) {
-                      canvas.drawText(statusText, 30, 110, badgePaint);
+                      canvas.drawText(statusText, 30, 105, badgePaint);
                   }
               }
 
@@ -247,10 +240,10 @@ jobs:
                   float width = r.width();
                   float height = r.height();
 
-                  RectF headOval = new RectF(cx - width * 0.28f, top, cx + width * 0.28f, top + height * 0.38f);
+                  RectF headOval = new RectF(cx - width * 0.30f, top, cx + width * 0.30f, top + height * 0.40f);
                   RectF torsoDome = new RectF(r.left, top + height * 0.22f, r.right, bottom);
                   canvas.drawOval(headOval, silhouettePaint);
-                  canvas.drawRoundRect(torsoDome, width * 0.38f, width * 0.38f, silhouettePaint);
+                  canvas.drawRoundRect(torsoDome, width * 0.40f, width * 0.40f, silhouettePaint);
               }
           }
           EOF
@@ -283,19 +276,22 @@ jobs:
               private boolean isLoaded = false;
 
               public static class DetectionInfo {
-                  public List<Rect> femaleRegions = new ArrayList<>();
-                  public List<Rect> maleFaces = new ArrayList<>();
+                  public List<Rect> femaleAndBodyZones = new ArrayList<>();
+                  public List<Rect> maleFaceZones = new ArrayList<>();
               }
 
-              // All classes except 12 (FACE_MALE)
-              private static final int[] FEMALE_AND_BODY_CLASSES = {
-                  0, 1, 2, 3, 4, 6, 7, 8, 11, 13, 15, 16, 17
+              // ONLY Female & Exposed Body Classes (Never blocks bearded men, speakers, or normal clothes!)
+              // 0: FEMALE_GENITALIA_COVERED, 1: FACE_FEMALE, 2: BUTTOCKS_EXPOSED,
+              // 3: FEMALE_BREAST_EXPOSED, 4: FEMALE_GENITALIA_EXPOSED, 6: ANUS_EXPOSED,
+              // 13: BELLY_EXPOSED, 16: FEMALE_BREAST_COVERED, 17: BUTTOCKS_COVERED
+              private static final int[] TARGET_CLASSES = {
+                  0, 1, 2, 3, 4, 6, 13, 16, 17
               };
 
               public NudeNetClassifier(Context context) {
                   try {
                       env = OrtEnvironment.getEnvironment();
-                      File modelFile = new File(context.getFilesDir(), "nudenet_v19_1.onnx");
+                      File modelFile = new File(context.getFilesDir(), "nudenet_v20.onnx");
                       if (!modelFile.exists() || modelFile.length() < 1000000) {
                           InputStream is = context.getAssets().open("nudenet.onnx");
                           FileOutputStream fos = new FileOutputStream(modelFile);
@@ -318,17 +314,58 @@ jobs:
                   }
               }
 
-              public DetectionInfo analyze(Bitmap bmp, int screenW, int screenH) {
+              // Auto-crops black letterbox bars in Fullscreen horizontal videos (like 00:52-01:14!)
+              // so small bikini figures in fullscreen get 3X higher resolution!
+              private Rect findActiveVideoArea(Bitmap bmp) {
+                  int w = bmp.getWidth();
+                  int h = bmp.getHeight();
+                  if (w > h) return new Rect(0, 0, w, h); // Already landscape
+
+                  int topBar = 0;
+                  int botBar = h;
+                  for (int y = h / 10; y < h * 4 / 10; y += 6) {
+                      int bright = 0;
+                      for (int x = w / 5; x < w * 4 / 5; x += 12) {
+                          int px = bmp.getPixel(x, y);
+                          if (((px >> 16) & 0xFF) > 22 || ((px >> 8) & 0xFF) > 22 || (px & 0xFF) > 22) bright++;
+                      }
+                      if (bright >= 3) { topBar = Math.max(0, y - 10); break; }
+                  }
+                  for (int y = h * 9 / 10; y > h * 6 / 10; y -= 6) {
+                      int bright = 0;
+                      for (int x = w / 5; x < w * 4 / 5; x += 12) {
+                          int px = bmp.getPixel(x, y);
+                          if (((px >> 16) & 0xFF) > 22 || ((px >> 8) & 0xFF) > 22 || (px & 0xFF) > 22) bright++;
+                      }
+                      if (bright >= 3) { botBar = Math.min(h, y + 10); break; }
+                  }
+                  if (botBar - topBar < h / 4) return new Rect(0, 0, w, h);
+                  return new Rect(0, topBar, w, botBar);
+              }
+
+              public DetectionInfo analyze(Bitmap fullBmp, int screenW, int screenH) {
                   DetectionInfo info = new DetectionInfo();
                   if (!isLoaded || session == null) return info;
                   try {
-                      int origW = bmp.getWidth();
-                      int origH = bmp.getHeight();
-                      float r = Math.min(320.0f / origW, 320.0f / origH);
-                      int unpadW = Math.round(origW * r);
-                      int unpadH = Math.round(origH * r);
+                      Rect activeRect = findActiveVideoArea(fullBmp);
+                      Bitmap bmp = Bitmap.createBitmap(fullBmp, activeRect.left, activeRect.top, activeRect.width(), activeRect.height());
+
+                      int roiW = bmp.getWidth();
+                      int roiH = bmp.getHeight();
+                      float scaleFullX = (float) screenW / fullBmp.getWidth();
+                      float scaleFullY = (float) screenH / fullBmp.getHeight();
+                      int offsetX = Math.round(activeRect.left * scaleFullX);
+                      int offsetY = Math.round(activeRect.top * scaleFullY);
+                      int activeScreenW = Math.round(roiW * scaleFullX);
+                      int activeScreenH = Math.round(roiH * scaleFullY);
+
+                      float r = Math.min(320.0f / roiW, 320.0f / roiH);
+                      int unpadW = Math.round(roiW * r);
+                      int unpadH = Math.round(roiH * r);
 
                       Bitmap resized = Bitmap.createScaledBitmap(bmp, unpadW, unpadH, true);
+                      bmp.recycle();
+
                       Bitmap letterboxed = Bitmap.createBitmap(320, 320, Bitmap.Config.ARGB_8888);
                       Canvas c = new Canvas(letterboxed);
                       c.drawColor(Color.rgb(114, 114, 114));
@@ -375,50 +412,61 @@ jobs:
                       tensor.close();
                       res.close();
 
-                      float scaleX = (float) screenW / unpadW;
-                      float scaleY = (float) screenH / unpadH;
+                      float scaleX = (float) activeScreenW / unpadW;
+                      float scaleY = (float) activeScreenH / unpadH;
 
                       for (int i = 0; i < preds.length; i++) {
                           float[] row = preds[i];
                           float maleScore = row[4 + 12];
                           float femFaceScore = row[4 + 1];
 
-                          if (maleScore >= 0.25f && maleScore > femFaceScore) {
-                              Rect mr = extractBox(row, scaleX, scaleY, screenW, screenH, 0.3f, 0.3f);
-                              if (mr != null) info.maleFaces.add(mr);
+                          // 1. Protect Male Faces & Torsos (e.g. Islamic speakers at 00:22-00:30!)
+                          if (maleScore >= 0.22f && maleScore > femFaceScore) {
+                              Rect mr = extractBox(row, scaleX, scaleY, offsetX, offsetY, screenW, screenH, 0.8f, 2.5f);
+                              if (mr != null) info.maleFaceZones.add(mr);
+                              continue;
                           }
 
+                          // 2. Detect Female Faces & Exposed Body Parts
                           float bestTarget = 0f;
-                          for (int cls : FEMALE_AND_BODY_CLASSES) {
+                          int bestCls = -1;
+                          for (int cls : TARGET_CLASSES) {
                               if (cls == 1 && !GhaadGuardService.blockFemaleFaces) continue;
                               if (row[4 + cls] > bestTarget) {
                                   bestTarget = row[4 + cls];
+                                  bestCls = cls;
                               }
                           }
 
-                          if (bestTarget >= 0.18f && bestTarget > maleScore) {
-                              Rect tr = extractBox(row, scaleX, scaleY, screenW, screenH, 0.65f, 1.6f);
-                              if (tr != null) info.femaleRegions.add(tr);
+                          if (bestTarget >= 0.16f && bestTarget > maleScore) {
+                              float padX = (bestCls == 1) ? 0.70f : 0.45f;
+                              float padY = (bestCls == 1) ? 2.00f : 0.70f;
+                              Rect tr = extractBox(row, scaleX, scaleY, offsetX, offsetY, screenW, screenH, padX, padY);
+                              if (tr != null) info.femaleAndBodyZones.add(tr);
                           }
                       }
                   } catch (Exception ignored) {}
                   return info;
               }
 
-              private Rect extractBox(float[] row, float scaleX, float scaleY, int screenW, int screenH, float padX, float padY) {
+              private Rect extractBox(float[] row, float scaleX, float scaleY, int offX, int offY, int screenW, int screenH, float padX, float padY) {
                   float cx = row[0], cy = row[1], w = row[2], h = row[3];
                   if (cx <= 1.05f && cy <= 1.05f && w <= 1.05f && h <= 1.05f) {
                       cx *= 320f; cy *= 320f; w *= 320f; h *= 320f;
                   }
                   int bw = Math.round(w * scaleX);
                   int bh = Math.round(h * scaleY);
-                  if (bw < 15 || bh < 15) return null;
+                  if (bw < 14 || bh < 14) return null;
                   int px = Math.round(bw * padX);
                   int py = Math.round(bh * padY);
-                  int l = Math.max(0, Math.round((cx - w / 2f) * scaleX) - px);
-                  int t = Math.max(0, Math.round((cy - h / 2f) * scaleY) - py);
-                  int r = Math.min(screenW, Math.round((cx + w / 2f) * scaleX) + px);
-                  int b = Math.min(screenH, Math.round((cy + h / 2f) * scaleY) + py);
+                  int l = Math.max(0, offX + Math.round((cx - w / 2f) * scaleX) - px);
+                  int t = Math.max(0, offY + Math.round((cy - h / 2f) * scaleY) - py);
+                  int r = Math.min(screenW, offX + Math.round((cx + w / 2f) * scaleX) + px);
+                  int b = Math.min(screenH, offY + Math.round((cy + h / 2f) * scaleY) + py);
+                  // Cap single box height to 65% of screen so it never blacks out the entire phone!
+                  if (b - t > (int) (screenH * 0.65f)) {
+                      b = t + (int) (screenH * 0.65f);
+                  }
                   return new Rect(l, t, r, b);
               }
           }
@@ -441,12 +489,9 @@ jobs:
           import android.view.Gravity;
           import android.view.WindowManager;
           import android.view.accessibility.AccessibilityEvent;
+          import android.view.accessibility.AccessibilityNodeInfo;
 
           import com.google.mlkit.vision.common.InputImage;
-          import com.google.mlkit.vision.face.Face;
-          import com.google.mlkit.vision.face.FaceDetection;
-          import com.google.mlkit.vision.face.FaceDetector;
-          import com.google.mlkit.vision.face.FaceDetectorOptions;
           import com.google.mlkit.vision.segmentation.Segmentation;
           import com.google.mlkit.vision.segmentation.SegmentationMask;
           import com.google.mlkit.vision.segmentation.Segmenter;
@@ -454,6 +499,7 @@ jobs:
 
           import java.nio.ByteBuffer;
           import java.util.ArrayList;
+          import java.util.Iterator;
           import java.util.List;
           import java.util.concurrent.ExecutorService;
           import java.util.concurrent.Executors;
@@ -466,11 +512,20 @@ jobs:
               private WindowManager windowManager;
               private SilhouetteOverlayView overlayView;
               private Segmenter bodySegmenter;
-              private FaceDetector faceDetector;
               private NudeNetClassifier nudeNet;
               private Handler mainHandler;
               private ExecutorService executor;
               private volatile boolean isBusy = false;
+              private long busyStartTime = 0;
+
+              // ZERO-BLINK TRACKER: Keeps existing silhouettes steady without hiding overlay!
+              private static class TrackedZone {
+                  Rect rect;
+                  int[] borderColors;
+                  long timestamp;
+              }
+              private final List<TrackedZone> lockedZones = new ArrayList<>();
+              private volatile boolean clearOnScroll = false;
 
               @Override
               protected void onServiceConnected() {
@@ -502,12 +557,6 @@ jobs:
                           .build();
                   bodySegmenter = Segmentation.getClient(segOpts);
 
-                  FaceDetectorOptions faceOpts = new FaceDetectorOptions.Builder()
-                          .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-                          .setMinFaceSize(0.035f)
-                          .build();
-                  faceDetector = FaceDetection.getClient(faceOpts);
-
                   executor.execute(() -> {
                       nudeNet = new NudeNetClassifier(GhaadGuardService.this);
                   });
@@ -515,44 +564,57 @@ jobs:
                   mainHandler.postDelayed(scanLoop, 450);
               }
 
-              private boolean isHomeOrSafeApp() {
+              // Real-time check of foreground app so Home Wallpaper & App Drawer (01:34-01:36) are NEVER blocked!
+              private boolean isCurrentScreenSafeLauncherOrSystem() {
+                  try {
+                      AccessibilityNodeInfo root = getRootInActiveWindow();
+                      if (root != null) {
+                          CharSequence rootPkg = root.getPackageName();
+                          root.recycle();
+                          if (rootPkg != null) {
+                              activePkg = rootPkg.toString();
+                          }
+                      }
+                  } catch (Exception ignored) {}
+
                   String p = activePkg.toLowerCase();
-                  if (p.isEmpty()) return true;
+                  if (p.isEmpty()) return false;
                   return p.contains("launcher") || p.contains("sec.android.app.launcher")
                           || p.contains("quickstep") || p.contains("com.ghaad.shield")
                           || p.contains("inputmethod") || p.contains("honeyboard")
-                          || p.contains("systemui") || p.contains("android.settings")
-                          || p.contains("dialer") || p.contains("bkash") || p.contains("nagad");
+                          || p.contains("android.settings") || p.contains("dialer")
+                          || p.contains("bkash") || p.contains("nagad");
               }
 
               private final Runnable scanLoop = new Runnable() {
                   @Override
                   public void run() {
-                      if (isHomeOrSafeApp()) {
+                      if (isCurrentScreenSafeLauncherOrSystem()) {
+                          lockedZones.clear();
                           overlayView.clearAll();
-                          mainHandler.postDelayed(this, 450);
+                          mainHandler.postDelayed(this, 400);
                           return;
+                      }
+
+                      // Watchdog: if isBusy got stuck during fullscreen rotation (00:52 bug!), auto-reset after 2.2s!
+                      if (isBusy && (System.currentTimeMillis() - busyStartTime > 2200)) {
+                          isBusy = false;
                       }
 
                       if (!isBusy && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                           isBusy = true;
-                          if (overlayView.hasActiveMask()) {
-                              overlayView.setAlpha(0f);
-                              mainHandler.postDelayed(() -> grabCleanFrame(), 14);
-                          } else {
-                              grabCleanFrame();
-                          }
+                          busyStartTime = System.currentTimeMillis();
+                          captureWithoutBlinking();
                       }
                       mainHandler.postDelayed(this, 1020);
                   }
               };
 
-              private void grabCleanFrame() {
+              private void captureWithoutBlinking() {
                   try {
                       takeScreenshot(Display.DEFAULT_DISPLAY, executor, new TakeScreenshotCallback() {
                           @Override
                           public void onSuccess(ScreenshotResult result) {
-                              mainHandler.post(() -> overlayView.setAlpha(1f));
                               try {
                                   HardwareBuffer hb = result.getHardwareBuffer();
                                   ColorSpace cs = result.getColorSpace();
@@ -568,108 +630,120 @@ jobs:
 
                                       Bitmap smallBmp = Bitmap.createScaledBitmap(softBmp, smallW, smallH, true);
                                       softBmp.recycle();
-                                      buildBodySilhouetteCurtain(smallBmp, origW, origH);
+                                      processFrameSteady(smallBmp, origW, origH);
                                   } else {
                                       hb.close();
                                       isBusy = false;
                                   }
                               } catch (Exception e) {
-                                  mainHandler.post(() -> overlayView.setAlpha(1f));
                                   isBusy = false;
                               }
                           }
 
                           @Override
                           public void onFailure(int errorCode) {
-                              mainHandler.post(() -> overlayView.setAlpha(1f));
                               isBusy = false;
                           }
                       });
                   } catch (Exception e) {
-                      overlayView.setAlpha(1f);
                       isBusy = false;
                   }
               }
 
-              private void buildBodySilhouetteCurtain(Bitmap smallBmp, int screenW, int screenH) {
+              private void processFrameSteady(Bitmap smallBmp, int capW, int capH) {
+                  // Always map to actual live overlay view dimensions (Fixes Fullscreen Rotation 00:52!)
+                  final int screenW = overlayView.getWidth() > 0 ? overlayView.getWidth() : capW;
+                  final int screenH = overlayView.getHeight() > 0 ? overlayView.getHeight() : capH;
                   final float scaleX = (float) screenW / smallBmp.getWidth();
                   final float scaleY = (float) screenH / smallBmp.getHeight();
+                  final long now = System.currentTimeMillis();
 
-                  final NudeNetClassifier.DetectionInfo nnInfo = (nudeNet != null)
+                  // 1. Verify existing locked silhouettes without blinking!
+                  synchronized (lockedZones) {
+                      if (clearOnScroll) {
+                          lockedZones.clear();
+                          clearOnScroll = false;
+                      } else {
+                          Iterator<TrackedZone> it = lockedZones.iterator();
+                          while (it.hasNext()) {
+                              TrackedZone tz = it.next();
+                              int[] curBorder = sampleOuterBorder(smallBmp, tz.rect, scaleX, scaleY);
+                              if (isBorderChanged(tz.borderColors, curBorder) || (now - tz.timestamp > 4000)) {
+                                  it.remove();
+                              }
+                          }
+                      }
+                  }
+
+                  // 2. Run True NudeNet ONNX (Finds Female Faces & Exposed Bodies; Rejects Men!)
+                  NudeNetClassifier.DetectionInfo nnInfo = (nudeNet != null)
                           ? nudeNet.analyze(smallBmp, screenW, screenH)
                           : new NudeNetClassifier.DetectionInfo();
 
-                  InputImage inputImage = InputImage.fromBitmap(smallBmp, 0);
+                  List<Rect> newTargets = new ArrayList<>(nnInfo.femaleAndBodyZones);
 
-                  faceDetector.process(inputImage)
-                          .addOnSuccessListener(faces -> {
-                              List<Rect> targetZones = new ArrayList<>(nnInfo.femaleRegions);
-                              List<Rect> safeMaleZones = new ArrayList<>(nnInfo.maleFaces);
+                  // Also add exposed bikini / bare-back skin clusters (excluding male zones)
+                  List<Rect> skinClusters = detectExposedSkinClusters(smallBmp, screenW, screenH, scaleX, scaleY);
+                  for (Rect sc : skinClusters) {
+                      if (!intersectsAny(sc, nnInfo.maleFaceZones)) {
+                          newTargets.add(sc);
+                      }
+                  }
 
-                              boolean coupleKissing = faces.size() >= 2 && areFacesClose(faces);
+                  synchronized (lockedZones) {
+                      for (Rect r : newTargets) {
+                          if (!intersectsAny(r, nnInfo.maleFaceZones)) {
+                              TrackedZone tz = new TrackedZone();
+                              tz.rect = r;
+                              tz.borderColors = sampleOuterBorder(smallBmp, r, scaleX, scaleY);
+                              tz.timestamp = now;
+                              lockedZones.add(tz);
+                          }
+                      }
 
-                              for (Face face : faces) {
-                                  Rect fb = face.getBoundingBox();
-                                  int fw = fb.width(), fh = fb.height();
-                                  Rect screenFace = new Rect(
-                                          (int) (fb.left * scaleX),
-                                          (int) (fb.top * scaleY),
-                                          (int) (fb.right * scaleX),
-                                          (int) (fb.bottom * scaleY)
-                                  );
+                      List<Rect> combined = new ArrayList<>();
+                      for (TrackedZone tz : lockedZones) {
+                          combined.add(new Rect(tz.rect));
+                      }
+                      final List<Rect> mergedTargets = mergeOverlapping(combined, screenH);
 
-                                  if (coupleKissing || isFemaleOrExposedBody(smallBmp, fb, screenFace, nnInfo)) {
-                                      Rect bodyZone = new Rect(
-                                              Math.max(0, (int) ((fb.left - fw * 1.1f) * scaleX)),
-                                              Math.max(0, (int) ((fb.top - fh * 0.5f) * scaleY)),
-                                              Math.min(screenW, (int) ((fb.right + fw * 1.1f) * scaleX)),
-                                              Math.min(screenH, (int) ((fb.bottom + fh * 3.2f) * scaleY))
-                                      );
-                                      targetZones.add(bodyZone);
-                                  } else {
-                                      Rect maleZone = new Rect(
-                                              Math.max(0, (int) ((fb.left - fw * 1.2f) * scaleX)),
-                                              Math.max(0, (int) ((fb.top - fh * 0.5f) * scaleY)),
-                                              Math.min(screenW, (int) ((fb.right + fw * 1.2f) * scaleX)),
-                                              Math.min(screenH, (int) ((fb.bottom + fh * 3.5f) * scaleY))
-                                      );
-                                      safeMaleZones.add(maleZone);
-                                  }
-                              }
+                      lockedZones.clear();
+                      for (Rect mr : mergedTargets) {
+                          TrackedZone tz = new TrackedZone();
+                          tz.rect = mr;
+                          tz.borderColors = sampleOuterBorder(smallBmp, mr, scaleX, scaleY);
+                          tz.timestamp = now;
+                          lockedZones.add(tz);
+                      }
 
-                              List<Rect> skinClusters = detectBareSkinClusters(smallBmp, screenW, screenH, scaleX, scaleY);
-                              for (Rect sc : skinClusters) {
-                                  if (!intersectsAny(sc, safeMaleZones)) {
-                                      targetZones.add(sc);
-                                  }
-                              }
-
-                              bodySegmenter.process(inputImage)
-                                      .addOnSuccessListener(mask -> {
-                                          Bitmap silhouetteBmp = createExactBodyMaskBitmap(mask, targetZones, safeMaleZones, screenW, screenH);
-                                          mainHandler.post(() -> {
-                                              if (!isHomeOrSafeApp()) {
-                                                  overlayView.updateSilhouette(silhouetteBmp, targetZones, "● V19.1 SILHOUETTE ACTIVE");
-                                              } else {
-                                                  if (silhouetteBmp != null) silhouetteBmp.recycle();
-                                                  overlayView.clearAll();
-                                              }
-                                              isBusy = false;
-                                          });
-                                          smallBmp.recycle();
-                                      })
-                                      .addOnFailureListener(e -> {
-                                          mainHandler.post(() -> {
-                                              overlayView.updateSilhouette(null, targetZones, "● V19.1 ACTIVE");
-                                              isBusy = false;
-                                          });
-                                          smallBmp.recycle();
-                                      });
-                          })
-                          .addOnFailureListener(e -> {
-                              smallBmp.recycle();
-                              isBusy = false;
-                          });
+                      // 3. Run Body Segmenter to shape the curtain to the exact human contour
+                      InputImage inputImage = InputImage.fromBitmap(smallBmp, 0);
+                      bodySegmenter.process(inputImage)
+                              .addOnSuccessListener(mask -> {
+                                  Bitmap silhouetteBmp = createExactBodyMaskBitmap(mask, mergedTargets, nnInfo.maleFaceZones, screenW, screenH);
+                                  mainHandler.post(() -> {
+                                      if (!isCurrentScreenSafeLauncherOrSystem()) {
+                                          overlayView.updateSilhouette(silhouetteBmp, mergedTargets, "● V20 ACTIVE");
+                                      } else {
+                                          if (silhouetteBmp != null) silhouetteBmp.recycle();
+                                          overlayView.clearAll();
+                                      }
+                                      isBusy = false;
+                                  });
+                                  smallBmp.recycle();
+                              })
+                              .addOnFailureListener(e -> {
+                                  mainHandler.post(() -> {
+                                      if (!isCurrentScreenSafeLauncherOrSystem()) {
+                                          overlayView.updateSilhouette(null, mergedTargets, "● V20 ACTIVE");
+                                      } else {
+                                          overlayView.clearAll();
+                                      }
+                                      isBusy = false;
+                                  });
+                                  smallBmp.recycle();
+                              });
+                  }
               }
 
               private Bitmap createExactBodyMaskBitmap(SegmentationMask mask, List<Rect> targetZones, List<Rect> safeMaleZones, int screenW, int screenH) {
@@ -705,69 +779,10 @@ jobs:
                   return bmp;
               }
 
-              private boolean isPointInZones(int x, int y, List<Rect> zones) {
-                  for (Rect r : zones) {
-                      if (r.contains(x, y)) return true;
-                  }
-                  return false;
-              }
-
-              private boolean intersectsAny(Rect target, List<Rect> zones) {
-                  for (Rect r : zones) {
-                      if (Rect.intersects(target, r)) return true;
-                  }
-                  return false;
-              }
-
-              private boolean areFacesClose(List<Face> faces) {
-                  for (int i = 0; i < faces.size(); i++) {
-                      for (int j = i + 1; j < faces.size(); j++) {
-                          Rect a = faces.get(i).getBoundingBox();
-                          Rect b = faces.get(j).getBoundingBox();
-                          Rect exp = new Rect(a.left - a.width(), a.top - a.height() / 2, a.right + a.width(), a.bottom + a.height());
-                          if (Rect.intersects(exp, b)) return true;
-                      }
-                  }
-                  return false;
-              }
-
-              private boolean isFemaleOrExposedBody(Bitmap bmp, Rect fb, Rect screenFace, NudeNetClassifier.DetectionInfo nnInfo) {
-                  for (Rect mr : nnInfo.maleFaces) {
-                      if (Rect.intersects(screenFace, mr)) return false;
-                  }
-                  for (Rect fr : nnInfo.femaleRegions) {
-                      if (Rect.intersects(screenFace, fr)) return true;
-                  }
-
-                  int w = bmp.getWidth(), h = bmp.getHeight();
-                  int fw = fb.width(), fh = fb.height();
-                  int top = Math.min(h - 1, fb.bottom + fh / 5);
-                  int bot = Math.min(h - 1, fb.bottom + (int) (fh * 2.0f));
-                  int left = Math.max(0, fb.left - fw / 2);
-                  int right = Math.min(w - 1, fb.right + fw / 2);
-
-                  int skin = 0, total = 0;
-                  for (int y = top; y <= bot; y += 2) {
-                      for (int x = left; x <= right; x += 2) {
-                          total++;
-                          if (isSkin(bmp.getPixel(x, y))) skin++;
-                      }
-                  }
-                  if (total > 0 && (skin * 100 / total) >= 20) return true;
-
-                  int crownColor = bmp.getPixel(Math.min(w - 1, Math.max(0, fb.centerX())), Math.max(0, fb.top - fh / 5));
-                  int wallColor = bmp.getPixel(Math.max(0, fb.left - fw), Math.min(h - 1, Math.max(0, fb.centerY())));
-                  int neckY = Math.min(h - 1, fb.bottom);
-                  int sideX = Math.max(0, fb.left - fw / 5);
-                  int sidePx = bmp.getPixel(sideX, neckY);
-
-                  return !isSkin(sidePx) && colorDiff(sidePx, crownColor) < 45 && colorDiff(sidePx, wallColor) > 40;
-              }
-
-              private List<Rect> detectBareSkinClusters(Bitmap bmp, int screenW, int screenH, float scaleX, float scaleY) {
+              private List<Rect> detectExposedSkinClusters(Bitmap bmp, int screenW, int screenH, float scaleX, float scaleY) {
                   List<Rect> boxes = new ArrayList<>();
                   int w = bmp.getWidth(), h = bmp.getHeight();
-                  int cols = 14, rows = 18;
+                  int cols = 16, rows = 18;
                   int cellW = w / cols, cellH = h / rows;
                   if (cellW < 4 || cellH < 4) return boxes;
 
@@ -781,7 +796,7 @@ jobs:
                                   if (isSkin(bmp.getPixel(c * cellW + dx, r * cellH + dy))) skin++;
                               }
                           }
-                          if (total > 0 && (skin * 100 / total) >= 50) grid[r][c] = true;
+                          if (total > 0 && (skin * 100 / total) >= 48) grid[r][c] = true;
                       }
                   }
 
@@ -809,7 +824,7 @@ jobs:
                                       }
                                   }
                               }
-                              if (count >= 4) {
+                              if (count >= 3) {
                                   boxes.add(new Rect(
                                           Math.max(0, (int) ((minC * cellW) * scaleX)),
                                           Math.max(0, (int) ((minR * cellH) * scaleY)),
@@ -823,10 +838,76 @@ jobs:
                   return boxes;
               }
 
-              private int colorDiff(int c1, int c2) {
-                  return Math.abs(((c1 >> 16) & 0xFF) - ((c2 >> 16) & 0xFF))
-                       + Math.abs(((c1 >> 8) & 0xFF) - ((c2 >> 8) & 0xFF))
-                       + Math.abs((c1 & 0xFF) - (c2 & 0xFF));
+              private int[] sampleOuterBorder(Bitmap bmp, Rect screenRect, float scaleX, float scaleY) {
+                  int w = bmp.getWidth(), h = bmp.getHeight();
+                  int l = Math.max(2, (int) (screenRect.left / scaleX) - 6);
+                  int t = Math.max(2, (int) (screenRect.top / scaleY) - 6);
+                  int r = Math.min(w - 3, (int) (screenRect.right / scaleX) + 6);
+                  int b = Math.min(h - 3, (int) (screenRect.bottom / scaleY) + 6);
+
+                  int[] samples = new int[12];
+                  int idx = 0;
+                  for (int i = 1; i <= 3; i++) {
+                      samples[idx++] = bmp.getPixel(l + (r - l) * i / 4, t);
+                      samples[idx++] = bmp.getPixel(l + (r - l) * i / 4, b);
+                      samples[idx++] = bmp.getPixel(l, t + (b - t) * i / 4);
+                      samples[idx++] = bmp.getPixel(r, t + (b - t) * i / 4);
+                  }
+                  return samples;
+              }
+
+              private boolean isBorderChanged(int[] oldB, int[] newB) {
+                  if (oldB == null || newB == null || oldB.length != newB.length) return true;
+                  int changed = 0;
+                  for (int i = 0; i < oldB.length; i++) {
+                      int c1 = oldB[i], c2 = newB[i];
+                      int diff = Math.abs(((c1 >> 16) & 0xFF) - ((c2 >> 16) & 0xFF))
+                               + Math.abs(((c1 >> 8) & 0xFF) - ((c2 >> 8) & 0xFF))
+                               + Math.abs((c1 & 0xFF) - (c2 & 0xFF));
+                      if (diff > 65) changed++;
+                  }
+                  return changed >= 6;
+              }
+
+              private List<Rect> mergeOverlapping(List<Rect> boxes, int screenH) {
+                  if (boxes.size() <= 1) return boxes;
+                  List<Rect> merged = new ArrayList<>(boxes);
+                  boolean changed = true;
+                  while (changed) {
+                      changed = false;
+                      for (int i = 0; i < merged.size(); i++) {
+                          for (int j = i + 1; j < merged.size(); j++) {
+                              Rect a = merged.get(i);
+                              Rect b = merged.get(j);
+                              if (Rect.intersects(a, b)) {
+                                  Rect u = new Rect(a);
+                                  u.union(b);
+                                  if (u.height() < (int) (screenH * 0.65f)) {
+                                      merged.set(i, u);
+                                      merged.remove(j);
+                                      changed = true;
+                                      break;
+                                  }
+                              }
+                          }
+                          if (changed) break;
+                      }
+                  }
+                  return merged;
+              }
+
+              private boolean isPointInZones(int x, int y, List<Rect> zones) {
+                  for (Rect r : zones) {
+                      if (r.contains(x, y)) return true;
+                  }
+                  return false;
+              }
+
+              private boolean intersectsAny(Rect target, List<Rect> zones) {
+                  for (Rect r : zones) {
+                      if (Rect.intersects(target, r)) return true;
+                  }
+                  return false;
               }
 
               private boolean isSkin(int px) {
@@ -842,12 +923,16 @@ jobs:
               @Override
               public void onAccessibilityEvent(AccessibilityEvent event) {
                   if (event == null) return;
+                  if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+                      clearOnScroll = true;
+                  }
                   if (event.getPackageName() != null) {
                       String pkg = event.getPackageName().toString();
                       if (!pkg.contains("systemui")) {
                           activePkg = pkg;
                       }
-                      if (isHomeOrSafeApp()) {
+                      if (isCurrentScreenSafeLauncherOrSystem()) {
+                          lockedZones.clear();
                           overlayView.clearAll();
                       }
                   }
@@ -891,7 +976,7 @@ jobs:
                   layout.setPadding(60, 60, 60, 60);
 
                   TextView title = new TextView(this);
-                  title.setText("GHAAD V19.1 SILHOUETTE\nExact Body-Shape Curtain AI");
+                  title.setText("GHAAD V20.0 SILHOUETTE\nFullscreen & Anti-Blink Fixed");
                   title.setTextColor(Color.parseColor("#10b981"));
                   title.setTextSize(22);
                   title.setGravity(Gravity.CENTER);
@@ -899,7 +984,7 @@ jobs:
                   layout.addView(title);
 
                   TextView sub = new TextView(this);
-                  sub.setText("• Replaces Square Boxes with Human Body Silhouette!\n• Fixed 'All-or-Nothing' Blindfold Bug\n• Protects Clothed Men & Background Video");
+                  sub.setText("• Works Non-Stop in Fullscreen Video (00:52 Fix)\n• Never Blocks Bearded Men / Speakers (00:22 Fix)\n• Zero Blinking & Never Blocks Home Screen");
                   sub.setTextColor(Color.parseColor("#cbd5e1"));
                   sub.setTextSize(14);
                   sub.setGravity(Gravity.CENTER);
@@ -934,7 +1019,7 @@ jobs:
 
               private void updateStatus() {
                   boolean s2 = GhaadGuardService.instance != null;
-                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Step 1: Activate Body-Shape Curtain");
+                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Step 1: Activate V20 Silhouette Shield");
 
                   boolean f1 = GhaadGuardService.blockFemaleFaces;
                   btnFaceToggle.setText((f1 ? "✅ ON: " : "⬜ OFF: ") + "Cover Female Face & Hair");
@@ -947,10 +1032,10 @@ jobs:
         run: gradle assembleDebug
 
       - name: Prepare APK File
-        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V19_Silhouette.apk
+        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V20_Silhouette.apk
 
       - name: Upload Compiled APK
         uses: actions/upload-artifact@v4
         with:
-          name: Ghaad_V19_Silhouette_APK
-          path: Ghaad_V19_Silhouette.apk
+          name: Ghaad_V20_Silhouette_APK
+          path: Ghaad_V20_Silhouette.apk
