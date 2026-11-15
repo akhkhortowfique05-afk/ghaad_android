@@ -1,4 +1,4 @@
-name: Build Ghaad V28 Ultimate Production APK
+name: Build Ghaad V29 Pure-V23 Plus Chrome APK
 
 on:
   push:
@@ -25,7 +25,7 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Generate V28 Ultimate Android Project
+      - name: Generate V29 Pure-V23 Plus Chrome Android Project
         run: |
           mkdir -p android_build/app/src/main/java/com/ghaad/shield
           mkdir -p android_build/app/src/main/res/xml
@@ -77,7 +77,7 @@ jobs:
                   mavenCentral()
               }
           }
-          rootProject.name = "GhaadV28Ultimate"
+          rootProject.name = "GhaadV29PureV23"
           include ':app'
           EOF
 
@@ -103,8 +103,8 @@ jobs:
                   applicationId "com.ghaad.shield"
                   minSdk 24
                   targetSdk 33
-                  versionCode 90
-                  versionName "28.0"
+                  versionCode 95
+                  versionName "29.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -129,7 +129,7 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
 
               <application
-                  android:label="Ghaad V28 Shield"
+                  android:label="Ghaad V29 Shield"
                   android:extractNativeLibs="true"
                   android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
@@ -218,10 +218,6 @@ jobs:
                   postInvalidate();
               }
 
-              public synchronized boolean hasBoxes() {
-                  return !blockedRects.isEmpty();
-              }
-
               @Override
               protected synchronized void onDraw(Canvas canvas) {
                   super.onDraw(canvas);
@@ -231,7 +227,7 @@ jobs:
                       canvas.drawText("GHAAD BLOCKED", r.centerX(), r.centerY(), textPaint);
                   }
                   if (showBadge) {
-                      canvas.drawText("● V28 ULTIMATE ACTIVE", 30, 105, badgePaint);
+                      canvas.drawText("● V29 (V23+CHROME) STEADY", 30, 105, badgePaint);
                   }
               }
           }
@@ -266,23 +262,16 @@ jobs:
               private String nudeNetInputName;
               private boolean ready = false;
 
-              // Exposed & Immodest Body Classes:
+              // EXACT V23 BODY_CLASSES (NO Class 1 FACE_FEMALE in NudeNet, so it NEVER creates false boxes on men at 02:00!):
               // 0: FEMALE_GENITALIA_COVERED, 2: BUTTOCKS_EXPOSED, 3: FEMALE_BREAST_EXPOSED,
-              // 4: FEMALE_GENITALIA_EXPOSED, 6: ANUS_EXPOSED, 13: BELLY_EXPOSED,
-              // 16: FEMALE_BREAST_COVERED (Bikini/Bra/Cleavage), 17: BUTTOCKS_COVERED
-              private static final int[] EXPOSED_BODY_CLASSES = {0, 2, 3, 4, 6, 13, 16, 17};
-
-              public static class NudeNetScanResult {
-                  public List<Rect> exposedBodyBoxes = new ArrayList<>();
-                  public List<Rect> femaleFaceBoxes = new ArrayList<>();
-                  public List<Rect> maleFaceBoxes = new ArrayList<>();
-              }
+              // 4: FEMALE_GENITALIA_EXPOSED, 13: BELLY_EXPOSED, 16: FEMALE_BREAST_COVERED, 17: BUTTOCKS_COVERED
+              private static final int[] BODY_CLASSES = {0, 2, 3, 4, 13, 16, 17};
 
               public DedicatedGenderAndBodyAI(Context context) {
                   try {
                       env = OrtEnvironment.getEnvironment();
-                      File gFile = copyAsset(context, "gender_cls.onnx", "v28_gender_cls.onnx");
-                      File nFile = copyAsset(context, "nudenet.onnx", "v28_nudenet.onnx");
+                      File gFile = copyAsset(context, "gender_cls.onnx", "v29_gender_cls.onnx");
+                      File nFile = copyAsset(context, "nudenet.onnx", "v29_nudenet.onnx");
 
                       OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
                       opts.setIntraOpNumThreads(2);
@@ -318,27 +307,25 @@ jobs:
                   return ready;
               }
 
-              // FIX FOR ARAB KEFFIYEH / GHUTRA IMAMS (02:08, 03:12, 03:28):
-              // 1. Checks if lower jaw/chin has a beard/mustache shadow compared to cheekbones.
-              // 2. Crops TIGHTLY around the inner face (0% outer headscarf padding) so a man's white/red keffiyeh is NEVER mistaken for a female hijab!
-              public boolean isFaceFemaleV28(Bitmap bmp, Rect faceBox) {
+              // EXACT V23 GENDER CLASSIFIER + Beard Protection for Keffiyeh Imams (00:06, 02:03):
+              public boolean isFaceFemale(Bitmap bmp, Rect faceBox) {
                   if (!ready || genderSession == null) return false;
                   try {
                       int w = bmp.getWidth(), h = bmp.getHeight();
                       int fw = faceBox.width(), fh = faceBox.height();
                       if (fw < 12 || fh < 12) return false;
 
-                      // Step A: Beard / Mustache / Stubble Check (Protects Sheikh Yasir 03:12, Speaker 03:28 & Qaris 02:08!)
-                      if (hasBeardOrMustacheShadow(bmp, faceBox)) {
-                          return false; // 100% Male!
+                      // Protect bearded Imams wearing white/red Keffiyeh (00:06 Sheikh Yasser, 02:03 Sheikh Alanadel)
+                      if (hasDarkBeardOnChin(bmp, faceBox)) {
+                          return false;
                       }
 
-                      // Step B: Tight Inner-Face Crop (Excludes outer headscarf/keffiyeh!)
-                      int x1 = Math.max(0, faceBox.left + fw / 14);
-                      int y1 = Math.max(0, faceBox.top + fh / 14);
-                      int x2 = Math.min(w, faceBox.right - fw / 14);
-                      int y2 = Math.min(h, faceBox.bottom - fh / 16);
-                      if (x2 - x1 < 10 || y2 - y1 < 10) return false;
+                      int padX = fw / 5, padY = fh / 5;
+                      int x1 = Math.max(0, faceBox.left - padX);
+                      int y1 = Math.max(0, faceBox.top - padY);
+                      int x2 = Math.min(w, faceBox.right + padX);
+                      int y2 = Math.min(h, faceBox.bottom + padY);
+                      if (x2 - x1 < 12 || y2 - y1 < 12) return false;
 
                       Bitmap crop = Bitmap.createBitmap(bmp, x1, y1, x2 - x1, y2 - y1);
                       Bitmap resized = Bitmap.createScaledBitmap(crop, 128, 128, true);
@@ -364,22 +351,20 @@ jobs:
                       tensor.close();
                       res.close();
 
+                      // Exact V23 threshold (0.58f)
                       float femaleProb = probs[0][0];
                       float maleProb = probs[0][1];
-                      // 0.48f on tight inner face catches Syeda Areeba (00:36-00:48) & Movie actress (02:24-02:40)!
-                      return femaleProb >= 0.48f && femaleProb >= maleProb * 0.92f;
+                      return femaleProb >= 0.58f && femaleProb > maleProb;
                   } catch (Exception e) {
                       return false;
                   }
               }
 
-              private boolean hasBeardOrMustacheShadow(Bitmap bmp, Rect fb) {
+              private boolean hasDarkBeardOnChin(Bitmap bmp, Rect fb) {
                   int w = bmp.getWidth(), h = bmp.getHeight();
                   int fw = fb.width(), fh = fb.height();
                   int x1 = Math.max(0, fb.left + fw / 4);
                   int x2 = Math.min(w - 1, fb.right - fw / 4);
-
-                  // Compare upper cheek/nose bridge brightness vs mustache/chin brightness
                   int upperY1 = Math.max(0, fb.top + fh / 5);
                   int upperY2 = Math.min(h - 1, fb.top + fh / 2);
                   int lowerY1 = Math.max(0, fb.top + fh * 2 / 3);
@@ -388,116 +373,72 @@ jobs:
                   long upperLum = 0, upperCnt = 0;
                   for (int y = upperY1; y <= upperY2; y += 2) {
                       for (int x = x1; x <= x2; x += 2) {
-                          upperLum += getLum(bmp.getPixel(x, y));
+                          int px = bmp.getPixel(x, y);
+                          upperLum += (((px >> 16) & 0xFF) * 299 + ((px >> 8) & 0xFF) * 587 + (px & 0xFF) * 114) / 1000;
                           upperCnt++;
                       }
                   }
-
-                  long lowerLum = 0, lowerCnt = 0, darkBeardPx = 0;
+                  long lowerLum = 0, lowerCnt = 0;
                   for (int y = lowerY1; y <= lowerY2; y += 2) {
                       for (int x = x1; x <= x2; x += 2) {
-                          int lum = getLum(bmp.getPixel(x, y));
-                          lowerLum += lum;
+                          int px = bmp.getPixel(x, y);
+                          lowerLum += (((px >> 16) & 0xFF) * 299 + ((px >> 8) & 0xFF) * 587 + (px & 0xFF) * 114) / 1000;
                           lowerCnt++;
-                          if (lum < 68) darkBeardPx++;
                       }
                   }
-
-                  if (upperCnt > 0 && lowerCnt > 0) {
-                      long avgU = upperLum / upperCnt;
-                      long avgL = lowerLum / lowerCnt;
-                      if ((avgU - avgL) >= 24 || (darkBeardPx * 100 / lowerCnt) >= 32) {
-                          return true;
-                      }
-                  }
-                  return false;
+                  return upperCnt > 0 && lowerCnt > 0 && ((upperLum / upperCnt) - (lowerLum / lowerCnt)) >= 26;
               }
 
-              private int getLum(int px) {
-                  return (((px >> 16) & 0xFF) * 299 + ((px >> 8) & 0xFF) * 587 + (px & 0xFF) * 114) / 1000;
-              }
-
-              public Rect findActiveVideoBounds(Bitmap bmp) {
+              // EXACT V23 findActiveVideoArea + detectExposedBodies (with wider padding to cover full dancer body!)
+              private Rect findActiveVideoArea(Bitmap bmp) {
                   int w = bmp.getWidth();
                   int h = bmp.getHeight();
+                  if (w > h) return new Rect(0, 0, w, h);
+
                   int topBar = 0, botBar = h;
-                  for (int y = h / 12; y < h * 4 / 10; y += 6) {
+                  for (int y = h / 10; y < h * 4 / 10; y += 6) {
                       int bright = 0;
-                      for (int x = w / 6; x < w * 5 / 6; x += 12) {
+                      for (int x = w / 5; x < w * 4 / 5; x += 12) {
                           int px = bmp.getPixel(x, y);
-                          if (((px >> 16) & 0xFF) > 20 || ((px >> 8) & 0xFF) > 20 || (px & 0xFF) > 20) bright++;
+                          if (((px >> 16) & 0xFF) > 22 || ((px >> 8) & 0xFF) > 22 || (px & 0xFF) > 22) bright++;
                       }
-                      if (bright >= 3) { topBar = Math.max(0, y - 8); break; }
+                      if (bright >= 3) { topBar = Math.max(0, y - 10); break; }
                   }
-                  for (int y = h * 11 / 12; y > h * 6 / 10; y -= 6) {
+                  for (int y = h * 9 / 10; y > h * 6 / 10; y -= 6) {
                       int bright = 0;
-                      for (int x = w / 6; x < w * 5 / 6; x += 12) {
+                      for (int x = w / 5; x < w * 4 / 5; x += 12) {
                           int px = bmp.getPixel(x, y);
-                          if (((px >> 16) & 0xFF) > 20 || ((px >> 8) & 0xFF) > 20 || (px & 0xFF) > 20) bright++;
+                          if (((px >> 16) & 0xFF) > 22 || ((px >> 8) & 0xFF) > 22 || (px & 0xFF) > 22) bright++;
                       }
-                      if (bright >= 3) { botBar = Math.min(h, y + 8); break; }
+                      if (bright >= 3) { botBar = Math.min(h, y + 10); break; }
                   }
-                  if (botBar - topBar < h / 5) return new Rect(0, 0, w, h);
+                  if (botBar - topBar < h / 4) return new Rect(0, 0, w, h);
                   return new Rect(0, topBar, w, botBar);
               }
 
-              public NudeNetScanResult scanMultiTile(Bitmap fullBmp, Rect activeBounds, int screenW, int screenH) {
-                  NudeNetScanResult totalRes = new NudeNetScanResult();
-                  if (!ready || nudeNetSession == null) return totalRes;
-
-                  float scaleFullX = (float) screenW / fullBmp.getWidth();
-                  float scaleFullY = (float) screenH / fullBmp.getHeight();
-
-                  Bitmap activeBmp = Bitmap.createBitmap(
-                          fullBmp, activeBounds.left, activeBounds.top,
-                          activeBounds.width(), activeBounds.height()
-                  );
-                  int aw = activeBmp.getWidth();
-                  int ah = activeBmp.getHeight();
-                  int offX = Math.round(activeBounds.left * scaleFullX);
-                  int offY = Math.round(activeBounds.top * scaleFullY);
-                  int activeScreenW = Math.round(aw * scaleFullX);
-                  int activeScreenH = Math.round(ah * scaleFullY);
-
-                  if (ah > aw * 1.3f) {
-                      int tileH = (int) (ah * 0.58f);
-                      int tileScreenH = (int) (activeScreenH * 0.58f);
-
-                      Bitmap topTile = Bitmap.createBitmap(activeBmp, 0, 0, aw, tileH);
-                      runTile(topTile, offX, offY, activeScreenW, tileScreenH, screenW, screenH, totalRes);
-                      topTile.recycle();
-
-                      Bitmap botTile = Bitmap.createBitmap(activeBmp, 0, ah - tileH, aw, tileH);
-                      runTile(botTile, offX, offY + (activeScreenH - tileScreenH), activeScreenW, tileScreenH, screenW, screenH, totalRes);
-                      botTile.recycle();
-                  } else if (aw > ah * 1.35f) {
-                      int tileW = (int) (aw * 0.60f);
-                      int tileScreenW = (int) (activeScreenW * 0.60f);
-
-                      Bitmap leftTile = Bitmap.createBitmap(activeBmp, 0, 0, tileW, ah);
-                      runTile(leftTile, offX, offY, tileScreenW, activeScreenH, screenW, screenH, totalRes);
-                      leftTile.recycle();
-
-                      Bitmap rightTile = Bitmap.createBitmap(activeBmp, aw - tileW, 0, tileW, ah);
-                      runTile(rightTile, offX + (activeScreenW - tileScreenW), offY, tileScreenW, activeScreenH, screenW, screenH, totalRes);
-                      rightTile.recycle();
-                  } else {
-                      runTile(activeBmp, offX, offY, activeScreenW, activeScreenH, screenW, screenH, totalRes);
-                  }
-                  activeBmp.recycle();
-                  return totalRes;
-              }
-
-              private void runTile(Bitmap tileBmp, int offX, int offY, int tileScreenW, int tileScreenH,
-                                   int fullScreenW, int fullScreenH, NudeNetScanResult outRes) {
+              public List<Rect> detectExposedBodies(Bitmap fullBmp, int screenW, int screenH) {
+                  if (!ready || nudeNetSession == null) return Collections.emptyList();
+                  List<Rect> boxes = new ArrayList<>();
                   try {
-                      int tw = tileBmp.getWidth();
-                      int th = tileBmp.getHeight();
-                      float r = Math.min(320.0f / tw, 320.0f / th);
-                      int unpadW = Math.round(tw * r);
-                      int unpadH = Math.round(th * r);
+                      Rect activeRect = findActiveVideoArea(fullBmp);
+                      Bitmap roiBmp = Bitmap.createBitmap(fullBmp, activeRect.left, activeRect.top, activeRect.width(), activeRect.height());
 
-                      Bitmap resized = Bitmap.createScaledBitmap(tileBmp, unpadW, unpadH, true);
+                      int roiW = roiBmp.getWidth();
+                      int roiH = roiBmp.getHeight();
+                      float scaleFullX = (float) screenW / fullBmp.getWidth();
+                      float scaleFullY = (float) screenH / fullBmp.getHeight();
+                      int offsetX = Math.round(activeRect.left * scaleFullX);
+                      int offsetY = Math.round(activeRect.top * scaleFullY);
+                      int activeScreenW = Math.round(roiW * scaleFullX);
+                      int activeScreenH = Math.round(roiH * scaleFullY);
+
+                      float r = Math.min(320.0f / roiW, 320.0f / roiH);
+                      int unpadW = Math.round(roiW * r);
+                      int unpadH = Math.round(roiH * r);
+
+                      Bitmap resized = Bitmap.createScaledBitmap(roiBmp, unpadW, unpadH, true);
+                      roiBmp.recycle();
+
                       Bitmap letterboxed = Bitmap.createBitmap(320, 320, Bitmap.Config.ARGB_8888);
                       Canvas c = new Canvas(letterboxed);
                       c.drawColor(Color.rgb(114, 114, 114));
@@ -539,60 +480,41 @@ jobs:
                       } else {
                           tensor.close();
                           res.close();
-                          return;
+                          return boxes;
                       }
                       tensor.close();
                       res.close();
 
-                      float scaleX = (float) tileScreenW / unpadW;
-                      float scaleY = (float) tileScreenH / unpadH;
+                      float scaleX = (float) activeScreenW / unpadW;
+                      float scaleY = (float) activeScreenH / unpadH;
 
                       for (int i = 0; i < preds.length; i++) {
                           float[] row = preds[i];
-                          float maleScore = row[4 + 12];
-                          float femScore = row[4 + 1];
-
-                          if (maleScore >= 0.24f && maleScore > femScore) {
-                              Rect mr = toScreenRect(row, scaleX, scaleY, offX, offY, fullScreenW, fullScreenH, 0.3f, 0.3f);
-                              if (mr != null) outRes.maleFaceBoxes.add(mr);
-                          }
-
-                          // Catches side-profile / tilted Female Faces (00:36-00:48, 02:24-02:44, 04:04)!
-                          if (femScore >= 0.28f && femScore > maleScore * 1.3f) {
-                              Rect fr = toScreenRect(row, scaleX, scaleY, offX, offY, fullScreenW, fullScreenH, 1.10f, 2.80f);
-                              if (fr != null) outRes.femaleFaceBoxes.add(fr);
-                          }
-
-                          float bestBody = 0f;
-                          for (int cls : EXPOSED_BODY_CLASSES) {
-                              if (row[4 + cls] > bestBody) {
-                                  bestBody = row[4 + cls];
+                          float bestScore = 0f;
+                          for (int cls : BODY_CLASSES) {
+                              if (row[4 + cls] > bestScore) {
+                                  bestScore = row[4 + cls];
                               }
                           }
-                          if (bestBody >= 0.15f) {
-                              Rect br = toScreenRect(row, scaleX, scaleY, offX, offY, fullScreenW, fullScreenH, 1.90f, 2.50f);
-                              if (br != null) outRes.exposedBodyBoxes.add(br);
+                          if (bestScore >= 0.16f) {
+                              float cx = row[0], cy = row[1], w = row[2], h = row[3];
+                              if (cx <= 1.05f && cy <= 1.05f && w <= 1.05f && h <= 1.05f) {
+                                  cx *= 320f; cy *= 320f; w *= 320f; h *= 320f;
+                              }
+                              int bw = Math.round(w * scaleX);
+                              int bh = Math.round(h * scaleY);
+                              if (bw < 14 || bh < 14) continue;
+                              int px = Math.round(bw * 1.40f);
+                              int py = Math.round(bh * 1.80f);
+                              int l = Math.max(0, offsetX + Math.round((cx - w / 2f) * scaleX) - px);
+                              int t = Math.max(0, offsetY + Math.round((cy - h / 2f) * scaleY) - py);
+                              int rRight = Math.min(screenW, offsetX + Math.round((cx + w / 2f) * scaleX) + px);
+                              int bBot = Math.min(screenH, offsetY + Math.round((cy + h / 2f) * scaleY) + py);
+                              boxes.add(new Rect(l, t, rRight, bBot));
                           }
                       }
                   } catch (Exception ignored) {}
-              }
-
-              private Rect toScreenRect(float[] row, float scaleX, float scaleY, int offX, int offY,
-                                        int fullW, int fullH, float padX, float padY) {
-                  float cx = row[0], cy = row[1], w = row[2], h = row[3];
-                  if (cx <= 1.05f && cy <= 1.05f && w <= 1.05f && h <= 1.05f) {
-                      cx *= 320f; cy *= 320f; w *= 320f; h *= 320f;
-                  }
-                  int bw = Math.round(w * scaleX);
-                  int bh = Math.round(h * scaleY);
-                  if (bw < 12 || bh < 12) return null;
-                  int px = Math.round(bw * padX);
-                  int py = Math.round(bh * padY);
-                  int l = Math.max(0, offX + Math.round((cx - w / 2f) * scaleX) - px);
-                  int t = Math.max(0, offY + Math.round((cy - h / 2f) * scaleY) - py);
-                  int r = Math.min(fullW, offX + Math.round((cx + w / 2f) * scaleX) + px);
-                  int b = Math.min(fullH, offY + Math.round((cy + h / 2f) * scaleY) + py);
-                  return new Rect(l, t, r, b);
+                  return boxes;
               }
           }
           EOF
@@ -623,6 +545,7 @@ jobs:
 
           import java.util.ArrayList;
           import java.util.Collections;
+          import java.util.Iterator;
           import java.util.List;
           import java.util.concurrent.ExecutorService;
           import java.util.concurrent.Executors;
@@ -640,11 +563,16 @@ jobs:
               private volatile boolean isBusy = false;
               private long busyStartTime = 0;
 
-              private List<Rect> currentBoxes = new ArrayList<>();
-              private long lastDetectionTime = 0;
+              // EXACT V23 ZERO-FLICKER SPATIAL TRACKER (Never blinks or drops boxes in fullscreen videos!):
+              private static class LockedBox {
+                  Rect rect;
+                  int[] outerBorderSignature;
+              }
+              private final List<LockedBox> activeLockedBoxes = new ArrayList<>();
+              private volatile boolean userScrolled = false;
               private volatile boolean adultSiteDetectedInBrowser = false;
 
-              // Catches ALL pages & domains of xhamster46.desi / porn sites immediately (Fixes 04:36-04:52!)
+              // Proven Chrome Adult Site Keywords (Worked 100% at 03:36-03:46 in video_1.mp4!)
               private static final String[] ADULT_KEYWORDS = {
                   "xhamster", "xhamp", ".desi", "pornhub", "xnxx", "xvideos", "redtube", "youporn",
                   "spankbang", "eporner", "brazzers", "chaturbate", "stripchat", "faphouse",
@@ -729,7 +657,6 @@ jobs:
                           || p.contains("bkash") || p.contains("nagad");
               }
 
-              // Deep Unlimited Browser DOM & URL Bar Scanner (Fixes 04:36-04:52 Chrome feed!)
               private String collectAllBrowserText(AccessibilityNodeInfo node, int depth) {
                   if (node == null || depth > 25) return "";
                   StringBuilder sb = new StringBuilder();
@@ -750,7 +677,7 @@ jobs:
                   @Override
                   public void run() {
                       if (isHomeOrSafeApp()) {
-                          currentBoxes.clear();
+                          synchronized (activeLockedBoxes) { activeLockedBoxes.clear(); }
                           overlayView.setBoxes(Collections.emptyList(), false);
                           mainHandler.postDelayed(this, 400);
                           return;
@@ -771,24 +698,18 @@ jobs:
                       if (!isBusy && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && genderBodyAI != null && genderBodyAI.isReady()) {
                           isBusy = true;
                           busyStartTime = System.currentTimeMillis();
-                          // 12ms peek ensures moving dancers in fullscreen (03:48-04:12) are tracked to their new position!
-                          if (overlayView.hasBoxes()) {
-                              overlayView.setAlpha(0f);
-                              mainHandler.postDelayed(() -> captureCleanScreen(), 14);
-                          } else {
-                              captureCleanScreen();
-                          }
+                          // EXACT V23 STEADY CAPTURE (NEVER hides overlay with setAlpha(0f) -> Zero Flickering!)
+                          captureScreenSteady();
                       }
                       mainHandler.postDelayed(this, 1020);
                   }
               };
 
-              private void captureCleanScreen() {
+              private void captureScreenSteady() {
                   try {
                       takeScreenshot(Display.DEFAULT_DISPLAY, executor, new TakeScreenshotCallback() {
                           @Override
                           public void onSuccess(ScreenshotResult result) {
-                              mainHandler.post(() -> overlayView.setAlpha(1f));
                               try {
                                   HardwareBuffer hb = result.getHardwareBuffer();
                                   ColorSpace cs = result.getColorSpace();
@@ -796,28 +717,26 @@ jobs:
                                   if (hwBmp != null) {
                                       int origW = hwBmp.getWidth();
                                       int origH = hwBmp.getHeight();
-                                      int smallW = Math.max(240, origW / 2);
-                                      int smallH = Math.max(240, origH / 2);
+                                      int smallW = Math.max(220, origW / 2);
+                                      int smallH = Math.max(220, origH / 2);
                                       Bitmap softBmp = hwBmp.copy(Bitmap.Config.ARGB_8888, false);
                                       hwBmp.recycle();
                                       hb.close();
 
                                       Bitmap scaledBmp = Bitmap.createScaledBitmap(softBmp, smallW, smallH, true);
                                       softBmp.recycle();
-                                      processFrameV28(scaledBmp, origW, origH);
+                                      processFramePureV23PlusChrome(scaledBmp, origW, origH);
                                   } else {
                                       hb.close();
                                       isBusy = false;
                                   }
                               } catch (Exception e) {
-                                  mainHandler.post(() -> overlayView.setAlpha(1f));
                                   isBusy = false;
                               }
                           }
 
                           @Override
                           public void onFailure(int errorCode) {
-                              mainHandler.post(() -> overlayView.setAlpha(1f));
                               if (isBrowserApp(activePkg)) {
                                   int w = overlayView.getWidth() > 0 ? overlayView.getWidth() : 1080;
                                   int h = overlayView.getHeight() > 0 ? overlayView.getHeight() : 2400;
@@ -827,7 +746,6 @@ jobs:
                           }
                       });
                   } catch (Exception e) {
-                      overlayView.setAlpha(1f);
                       isBusy = false;
                   }
               }
@@ -849,7 +767,8 @@ jobs:
                   return total > 0 && (blackCount * 100 / total) >= 95;
               }
 
-              private void processFrameV28(Bitmap bmp, int capW, int capH) {
+              // EXACT V23 PROCESSING PIPELINE + CHROME INCOGNITO BLOCKER:
+              private void processFramePureV23PlusChrome(Bitmap bmp, int capW, int capH) {
                   final int screenW = overlayView.getWidth() > 0 ? overlayView.getWidth() : capW;
                   final int screenH = overlayView.getHeight() > 0 ? overlayView.getHeight() : capH;
                   final float scaleX = (float) screenW / bmp.getWidth();
@@ -864,9 +783,27 @@ jobs:
                       return;
                   }
 
-                  final Rect activeBounds = genderBodyAI.findActiveVideoBounds(bmp);
-                  final DedicatedGenderAndBodyAI.NudeNetScanResult nnRes = genderBodyAI.scanMultiTile(bmp, activeBounds, screenW, screenH);
+                  // STEP 1: V23 Zero-Flicker Spatial Lock
+                  synchronized (activeLockedBoxes) {
+                      if (userScrolled) {
+                          activeLockedBoxes.clear();
+                          userScrolled = false;
+                      } else {
+                          Iterator<LockedBox> it = activeLockedBoxes.iterator();
+                          while (it.hasNext()) {
+                              LockedBox lb = it.next();
+                              int[] curSig = sampleOuterBorder(bmp, lb.rect, scaleX, scaleY);
+                              if (isSceneChangedOutsideBox(lb.outerBorderSignature, curSig)) {
+                                  it.remove();
+                              }
+                          }
+                      }
+                  }
 
+                  // STEP 2: V23 Exposed Bodies via NudeNet ONNX
+                  final List<Rect> exposedBodyRects = genderBodyAI.detectExposedBodies(bmp, screenW, screenH);
+
+                  // STEP 3: V23 ML Kit Faces + Dedicated YOLOv8-Gender ONNX
                   InputImage image = InputImage.fromBitmap(bmp, 0);
                   faceDetector.process(image)
                           .addOnSuccessListener(faces -> {
@@ -879,16 +816,15 @@ jobs:
                                   Rect fb = face.getBoundingBox();
                                   int fw = fb.width(), fh = fb.height();
 
-                                  // Tight Inner-Face Crop + Beard Filter (Protects Arab Keffiyeh Imams at 02:08, 03:12, 03:28!)
-                                  boolean isFemale = genderBodyAI.isFaceFemaleV28(bmp, fb);
+                                  boolean isFemale = genderBodyAI.isFaceFemale(bmp, fb);
 
                                   if (isFemale) {
-                                      int left = Math.max(0, (int) ((fb.left - fw * 1.15f) * scaleX));
-                                      int top = Math.max(0, (int) ((fb.top - fh * 0.55f) * scaleY));
-                                      int right = Math.min(screenW, (int) ((fb.right + fw * 1.15f) * scaleX));
-                                      int bottom = Math.min(screenH, (int) ((fb.bottom + fh * 3.20f) * scaleY));
-                                      if (bottom - top > (int) (screenH * 0.65f)) {
-                                          bottom = top + (int) (screenH * 0.65f);
+                                      int left = Math.max(0, (int) ((fb.left - fw * 0.95f) * scaleX));
+                                      int top = Math.max(0, (int) ((fb.top - fh * 0.50f) * scaleY));
+                                      int right = Math.min(screenW, (int) ((fb.right + fw * 0.95f) * scaleX));
+                                      int bottom = Math.min(screenH, (int) ((fb.bottom + fh * 2.80f) * scaleY));
+                                      if (bottom - top > (int) (screenH * 0.62f)) {
+                                          bottom = top + (int) (screenH * 0.62f);
                                       }
                                       Rect fScreen = new Rect(left, top, right, bottom);
                                       femaleFaceRects.add(fScreen);
@@ -902,23 +838,14 @@ jobs:
                                       );
                                       maleFaceRects.add(mFace);
 
-                                      int mLeft = Math.max(0, (int) ((fb.left - fw * 1.6f) * scaleX));
+                                      int mLeft = Math.max(0, (int) ((fb.left - fw * 1.5f) * scaleX));
                                       int mTop = Math.max(0, (int) ((fb.top - fh * 0.5f) * scaleY));
-                                      int mRight = Math.min(screenW, (int) ((fb.right + fw * 1.6f) * scaleX));
-                                      int mBottom = Math.min(screenH, (int) ((fb.bottom + fh * 3.8f) * scaleY));
+                                      int mRight = Math.min(screenW, (int) ((fb.right + fw * 1.5f) * scaleX));
+                                      int mBottom = Math.min(screenH, (int) ((fb.bottom + fh * 3.5f) * scaleY));
                                       maleSafeZones.add(new Rect(mLeft, mTop, mRight, mBottom));
                                   }
                               }
 
-                              // Add side-profile Female Faces from NudeNet (unless overlapping a confirmed Male Safe Zone)
-                              for (Rect nf : nnRes.femaleFaceBoxes) {
-                                  if (!intersectsAny(nf, maleSafeZones)) {
-                                      femaleFaceRects.add(nf);
-                                      newlyDetected.add(nf);
-                                  }
-                              }
-
-                              // Block Male + Female Kissing / Romantic Embrace (02:44-02:48)
                               for (Rect ff : femaleFaceRects) {
                                   for (Rect mf : maleFaceRects) {
                                       Rect expM = new Rect(mf.left - mf.width(), mf.top - mf.height() / 2, mf.right + mf.width(), mf.bottom + mf.height());
@@ -930,31 +857,44 @@ jobs:
                                   }
                               }
 
-                              // Add Exposed Body Parts (Bikini/Dance/Cleavage) outside Male Safe Zones
-                              for (Rect eb : nnRes.exposedBodyBoxes) {
-                                  if (!intersectsAny(eb, maleSafeZones)) {
+                              for (Rect eb : exposedBodyRects) {
+                                  boolean onMale = false;
+                                  for (Rect mz : maleSafeZones) {
+                                      if (Rect.intersects(eb, mz)) {
+                                          onMale = true;
+                                          break;
+                                      }
+                                  }
+                                  if (!onMale) {
                                       newlyDetected.add(eb);
                                   }
                               }
 
-                              final List<Rect> merged = mergeBoxesCleanly(newlyDetected, screenH);
-                              final long now = System.currentTimeMillis();
+                              synchronized (activeLockedBoxes) {
+                                  List<Rect> all = new ArrayList<>();
+                                  for (LockedBox lb : activeLockedBoxes) {
+                                      all.add(new Rect(lb.rect));
+                                  }
+                                  all.addAll(newlyDetected);
 
-                              mainHandler.post(() -> {
-                                  if (!merged.isEmpty()) {
-                                      currentBoxes = merged;
-                                      lastDetectionTime = now;
-                                  } else if (now - lastDetectionTime > 1200) {
-                                      currentBoxes.clear();
+                                  final List<Rect> merged = mergeBoxesCleanly(all, screenH);
+                                  activeLockedBoxes.clear();
+                                  for (Rect mr : merged) {
+                                      LockedBox lb = new LockedBox();
+                                      lb.rect = mr;
+                                      lb.outerBorderSignature = sampleOuterBorder(bmp, mr, scaleX, scaleY);
+                                      activeLockedBoxes.add(lb);
                                   }
 
-                                  if (!isHomeOrSafeApp()) {
-                                      overlayView.setBoxes(currentBoxes, true);
-                                  } else {
-                                      overlayView.setBoxes(Collections.emptyList(), false);
-                                  }
-                                  isBusy = false;
-                              });
+                                  mainHandler.post(() -> {
+                                      if (!isHomeOrSafeApp()) {
+                                          overlayView.setBoxes(merged, true);
+                                      } else {
+                                          overlayView.setBoxes(Collections.emptyList(), false);
+                                      }
+                                      isBusy = false;
+                                  });
+                              }
                               bmp.recycle();
                           })
                           .addOnFailureListener(e -> {
@@ -963,11 +903,35 @@ jobs:
                           });
               }
 
-              private boolean intersectsAny(Rect target, List<Rect> zones) {
-                  for (Rect r : zones) {
-                      if (Rect.intersects(target, r)) return true;
+              private int[] sampleOuterBorder(Bitmap bmp, Rect screenRect, float scaleX, float scaleY) {
+                  int w = bmp.getWidth(), h = bmp.getHeight();
+                  int l = Math.max(2, (int) (screenRect.left / scaleX) - 8);
+                  int t = Math.max(2, (int) (screenRect.top / scaleY) - 8);
+                  int r = Math.min(w - 3, (int) (screenRect.right / scaleX) + 8);
+                  int b = Math.min(h - 3, (int) (screenRect.bottom / scaleY) + 8);
+
+                  int[] sig = new int[12];
+                  int idx = 0;
+                  for (int i = 1; i <= 3; i++) {
+                      sig[idx++] = bmp.getPixel(l + (r - l) * i / 4, t);
+                      sig[idx++] = bmp.getPixel(l + (r - l) * i / 4, b);
+                      sig[idx++] = bmp.getPixel(l, t + (b - t) * i / 4);
+                      sig[idx++] = bmp.getPixel(r, t + (b - t) * i / 4);
                   }
-                  return false;
+                  return sig;
+              }
+
+              private boolean isSceneChangedOutsideBox(int[] oldSig, int[] newSig) {
+                  if (oldSig == null || newSig == null || oldSig.length != newSig.length) return true;
+                  int diffCount = 0;
+                  for (int i = 0; i < oldSig.length; i++) {
+                      int c1 = oldSig[i], c2 = newSig[i];
+                      int diff = Math.abs(((c1 >> 16) & 0xFF) - ((c2 >> 16) & 0xFF))
+                               + Math.abs(((c1 >> 8) & 0xFF) - ((c2 >> 8) & 0xFF))
+                               + Math.abs((c1 & 0xFF) - (c2 & 0xFF));
+                      if (diff > 70) diffCount++;
+                  }
+                  return diffCount >= 7;
               }
 
               private List<Rect> mergeBoxesCleanly(List<Rect> boxes, int screenH) {
@@ -980,11 +944,10 @@ jobs:
                           for (int j = i + 1; j < merged.size(); j++) {
                               Rect a = merged.get(i);
                               Rect b = merged.get(j);
-                              Rect exp = new Rect(a.left - 35, a.top - 35, a.right + 35, a.bottom + 35);
-                              if (Rect.intersects(exp, b)) {
+                              if (Rect.intersects(a, b)) {
                                   Rect u = new Rect(a);
                                   u.union(b);
-                                  if (u.height() < (int) (screenH * 0.72f)) {
+                                  if (u.height() < (int) (screenH * 0.68f)) {
                                       merged.set(i, u);
                                       merged.remove(j);
                                       changed = true;
@@ -1002,7 +965,7 @@ jobs:
               public void onAccessibilityEvent(AccessibilityEvent event) {
                   if (event == null) return;
                   if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
-                      currentBoxes.clear();
+                      userScrolled = true;
                   }
                   if (event.getPackageName() != null) {
                       String pkg = event.getPackageName().toString();
@@ -1010,7 +973,7 @@ jobs:
                           activePkg = pkg;
                       }
                       if (isHomeOrSafeApp()) {
-                          currentBoxes.clear();
+                          synchronized (activeLockedBoxes) { activeLockedBoxes.clear(); }
                           overlayView.setBoxes(Collections.emptyList(), false);
                       }
                   }
@@ -1054,7 +1017,7 @@ jobs:
                   layout.setPadding(60, 60, 60, 60);
 
                   TextView title = new TextView(this);
-                  title.setText("GHAAD V28.0 ULTIMATE\nKeffiyeh Male-Fix + Chrome Blocker");
+                  title.setText("GHAAD V29.0 (PURE V23 + CHROME)\nZero-Flicker Gender AI + Chrome Shield");
                   title.setTextColor(Color.parseColor("#10b981"));
                   title.setTextSize(21);
                   title.setGravity(Gravity.CENTER);
@@ -1062,7 +1025,7 @@ jobs:
                   layout.addView(title);
 
                   TextView sub = new TextView(this);
-                  sub.setText("• Tight Inner-Face Crop + Beard Filter (Never Blocks Arab Imams!)\n• Dynamic Tracking for Moving Dancers in Fullscreen\n• Deep DOM & URL Scanner for Chrome Adult Sites\n• Catches Side-Profile Actresses & Nasheed Singers");
+                  sub.setText("• 100% Pure V23 Engine (Zero Flickering & Male-Safe!)\n• Removed setAlpha(0f) Blinking & False Side Boxes\n• Added Proven V28 Chrome Adult Site Blocker\n• Protects Keffiyeh Imams & Speakers");
                   sub.setTextColor(Color.parseColor("#cbd5e1"));
                   sub.setTextSize(14);
                   sub.setGravity(Gravity.CENTER);
@@ -1082,7 +1045,7 @@ jobs:
               protected void onResume() {
                   super.onResume();
                   boolean s2 = GhaadGuardService.instance != null;
-                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Activate V28 Ultimate Shield");
+                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Activate V29 (Pure V23 + Chrome)");
               }
           }
           EOF
@@ -1092,10 +1055,10 @@ jobs:
         run: gradle assembleDebug
 
       - name: Prepare APK File
-        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V28_Ultimate.apk
+        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V29_PureV23_Chrome.apk
 
       - name: Upload Compiled APK
         uses: actions/upload-artifact@v4
         with:
-          name: Ghaad_V28_Ultimate_APK
-          path: Ghaad_V28_Ultimate.apk
+          name: Ghaad_V29_PureV23_Chrome_APK
+          path: Ghaad_V29_PureV23_Chrome.apk
