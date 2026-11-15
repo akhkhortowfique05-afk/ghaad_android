@@ -1,4 +1,4 @@
-name: Build Ghaad V25 Chrome & Cleavage AI APK
+name: Build Ghaad V26 Final Production APK
 
 on:
   push:
@@ -25,7 +25,7 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Generate V25 Android Project
+      - name: Generate V26 Final Android Project
         run: |
           mkdir -p android_build/app/src/main/java/com/ghaad/shield
           mkdir -p android_build/app/src/main/res/xml
@@ -77,7 +77,7 @@ jobs:
                   mavenCentral()
               }
           }
-          rootProject.name = "GhaadV25Ultimate"
+          rootProject.name = "GhaadV26Final"
           include ':app'
           EOF
 
@@ -103,8 +103,8 @@ jobs:
                   applicationId "com.ghaad.shield"
                   minSdk 24
                   targetSdk 33
-                  versionCode 75
-                  versionName "25.0"
+                  versionCode 80
+                  versionName "26.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -129,7 +129,7 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
 
               <application
-                  android:label="Ghaad V25 Shield"
+                  android:label="Ghaad V26 Shield"
                   android:extractNativeLibs="true"
                   android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
@@ -154,6 +154,16 @@ jobs:
                       <meta-data android:name="android.accessibilityservice"
                           android:resource="@xml/accessibility_config"/>
                   </service>
+
+                  <receiver android:name=".GhaadAdminReceiver"
+                      android:permission="android.permission.BIND_DEVICE_ADMIN"
+                      android:exported="true">
+                      <meta-data android:name="android.app.device_admin"
+                          android:resource="@xml/device_admin"/>
+                      <intent-filter>
+                          <action android:name="android.app.action.DEVICE_ADMIN_ENABLED"/>
+                      </intent-filter>
+                  </receiver>
               </application>
           </manifest>
           EOF
@@ -165,8 +175,23 @@ jobs:
               android:accessibilityFeedbackType="feedbackGeneric"
               android:canRetrieveWindowContent="true"
               android:canTakeScreenshot="true"
-              android:accessibilityFlags="flagRetrieveInteractiveWindows|flagIncludeNotImportantViews|flagReportViewIds"
+              android:accessibilityFlags="flagRetrieveInteractiveWindows|flagIncludeNotImportantViews|flagReportViewIds|flagRequestEnhancedWebAccessibility"
               android:notificationTimeout="40"/>
+          EOF
+
+          cat << 'EOF' > android_build/app/src/main/res/xml/device_admin.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-policies>
+                  <force-lock/>
+              </uses-policies>
+          </device-admin>
+          EOF
+
+          cat << 'EOF' > android_build/app/src/main/java/com/ghaad/shield/GhaadAdminReceiver.java
+          package com.ghaad.shield;
+          import android.app.admin.DeviceAdminReceiver;
+          public class GhaadAdminReceiver extends DeviceAdminReceiver {}
           EOF
 
           cat << 'EOF' > android_build/app/src/main/java/com/ghaad/shield/CensorOverlayView.java
@@ -218,6 +243,10 @@ jobs:
                   postInvalidate();
               }
 
+              public synchronized boolean hasBoxes() {
+                  return !blockedRects.isEmpty();
+              }
+
               @Override
               protected synchronized void onDraw(Canvas canvas) {
                   super.onDraw(canvas);
@@ -227,7 +256,7 @@ jobs:
                       canvas.drawText("GHAAD BLOCKED", r.centerX(), r.centerY(), textPaint);
                   }
                   if (showBadge) {
-                      canvas.drawText("● V25 ACTIVE", 30, 105, badgePaint);
+                      canvas.drawText("● V26 ACTIVE", 30, 105, badgePaint);
                   }
               }
           }
@@ -272,8 +301,8 @@ jobs:
               public DedicatedGenderAndBodyAI(Context context) {
                   try {
                       env = OrtEnvironment.getEnvironment();
-                      File gFile = copyAsset(context, "gender_cls.onnx", "v25_gender_cls.onnx");
-                      File nFile = copyAsset(context, "nudenet.onnx", "v25_nudenet.onnx");
+                      File gFile = copyAsset(context, "gender_cls.onnx", "v26_gender_cls.onnx");
+                      File nFile = copyAsset(context, "nudenet.onnx", "v26_nudenet.onnx");
 
                       OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
                       opts.setIntraOpNumThreads(2);
@@ -351,27 +380,78 @@ jobs:
                   }
               }
 
-              public NudeNetScanResult scanScreenMultiTile(Bitmap fullBmp, int screenW, int screenH) {
+              // Crops top & bottom black bars first (for fullscreen horizontal videos like 01:53-02:33!),
+              // then scans high-res tiles so neither Portrait nor Fullscreen Landscape ever loses resolution!
+              public Rect findActiveVideoBounds(Bitmap bmp) {
+                  int w = bmp.getWidth();
+                  int h = bmp.getHeight();
+                  int topBar = 0, botBar = h;
+                  for (int y = h / 12; y < h * 4 / 10; y += 6) {
+                      int bright = 0;
+                      for (int x = w / 6; x < w * 5 / 6; x += 12) {
+                          int px = bmp.getPixel(x, y);
+                          if (((px >> 16) & 0xFF) > 20 || ((px >> 8) & 0xFF) > 20 || (px & 0xFF) > 20) bright++;
+                      }
+                      if (bright >= 3) { topBar = Math.max(0, y - 8); break; }
+                  }
+                  for (int y = h * 11 / 12; y > h * 6 / 10; y -= 6) {
+                      int bright = 0;
+                      for (int x = w / 6; x < w * 5 / 6; x += 12) {
+                          int px = bmp.getPixel(x, y);
+                          if (((px >> 16) & 0xFF) > 20 || ((px >> 8) & 0xFF) > 20 || (px & 0xFF) > 20) bright++;
+                      }
+                      if (bright >= 3) { botBar = Math.min(h, y + 8); break; }
+                  }
+                  if (botBar - topBar < h / 5) return new Rect(0, 0, w, h);
+                  return new Rect(0, topBar, w, botBar);
+              }
+
+              public NudeNetScanResult scanScreenMultiTile(Bitmap fullBmp, Rect activeBounds, int screenW, int screenH) {
                   NudeNetScanResult totalRes = new NudeNetScanResult();
                   if (!ready || nudeNetSession == null) return totalRes;
 
-                  int w = fullBmp.getWidth();
-                  int h = fullBmp.getHeight();
+                  float scaleFullX = (float) screenW / fullBmp.getWidth();
+                  float scaleFullY = (float) screenH / fullBmp.getHeight();
 
-                  if (h > w * 1.3f) {
-                      int tileH = (int) (h * 0.58f);
-                      Bitmap topTile = Bitmap.createBitmap(fullBmp, 0, 0, w, tileH);
-                      runNudeNetOnTile(topTile, 0, 0, screenW, (int) (screenH * 0.58f), screenW, screenH, totalRes);
+                  Bitmap activeBmp = Bitmap.createBitmap(
+                          fullBmp, activeBounds.left, activeBounds.top,
+                          activeBounds.width(), activeBounds.height()
+                  );
+                  int aw = activeBmp.getWidth();
+                  int ah = activeBmp.getHeight();
+                  int offX = Math.round(activeBounds.left * scaleFullX);
+                  int offY = Math.round(activeBounds.top * scaleFullY);
+                  int activeScreenW = Math.round(aw * scaleFullX);
+                  int activeScreenH = Math.round(ah * scaleFullY);
+
+                  if (ah > aw * 1.3f) {
+                      // Portrait Feed / Chrome Page: Scan Top & Bottom tiles
+                      int tileH = (int) (ah * 0.58f);
+                      int tileScreenH = (int) (activeScreenH * 0.58f);
+
+                      Bitmap topTile = Bitmap.createBitmap(activeBmp, 0, 0, aw, tileH);
+                      runNudeNetOnTile(topTile, offX, offY, activeScreenW, tileScreenH, screenW, screenH, totalRes);
                       topTile.recycle();
 
-                      int botY = h - tileH;
-                      int botScreenY = screenH - (int) (screenH * 0.58f);
-                      Bitmap botTile = Bitmap.createBitmap(fullBmp, 0, botY, w, tileH);
-                      runNudeNetOnTile(botTile, 0, botScreenY, screenW, (int) (screenH * 0.58f), screenW, screenH, totalRes);
+                      Bitmap botTile = Bitmap.createBitmap(activeBmp, 0, ah - tileH, aw, tileH);
+                      runNudeNetOnTile(botTile, offX, offY + (activeScreenH - tileScreenH), activeScreenW, tileScreenH, screenW, screenH, totalRes);
                       botTile.recycle();
+                  } else if (aw > ah * 1.35f) {
+                      // Widescreen Landscape Video (01:53-02:33): Scan Left & Right overlapping square tiles!
+                      int tileW = (int) (aw * 0.60f);
+                      int tileScreenW = (int) (activeScreenW * 0.60f);
+
+                      Bitmap leftTile = Bitmap.createBitmap(activeBmp, 0, 0, tileW, ah);
+                      runNudeNetOnTile(leftTile, offX, offY, tileScreenW, activeScreenH, screenW, screenH, totalRes);
+                      leftTile.recycle();
+
+                      Bitmap rightTile = Bitmap.createBitmap(activeBmp, aw - tileW, 0, tileW, ah);
+                      runNudeNetOnTile(rightTile, offX + (activeScreenW - tileScreenW), offY, tileScreenW, activeScreenH, screenW, screenH, totalRes);
+                      rightTile.recycle();
                   } else {
-                      runNudeNetOnTile(fullBmp, 0, 0, screenW, screenH, screenW, screenH, totalRes);
+                      runNudeNetOnTile(activeBmp, offX, offY, activeScreenW, activeScreenH, screenW, screenH, totalRes);
                   }
+                  activeBmp.recycle();
                   return totalRes;
               }
 
@@ -439,12 +519,12 @@ jobs:
                           float maleFaceScore = row[4 + 12];
                           float femFaceScore = row[4 + 1];
 
-                          if (maleFaceScore >= 0.25f && maleFaceScore > femFaceScore) {
+                          if (maleFaceScore >= 0.24f && maleFaceScore > femFaceScore) {
                               Rect mr = toScreenRect(row, scaleX, scaleY, offX, offY, fullScreenW, fullScreenH, 0.4f, 0.4f);
                               if (mr != null) outRes.maleFaceBoxes.add(mr);
                           }
 
-                          if (femFaceScore >= 0.25f && femFaceScore > maleFaceScore) {
+                          if (femFaceScore >= 0.22f && femFaceScore > maleFaceScore) {
                               Rect fr = toScreenRect(row, scaleX, scaleY, offX, offY, fullScreenW, fullScreenH, 0.85f, 2.2f);
                               if (fr != null) outRes.bodyAndFemaleBoxes.add(fr);
                           }
@@ -455,8 +535,8 @@ jobs:
                                   bestBody = row[4 + cls];
                               }
                           }
-                          if (bestBody >= 0.15f) {
-                              Rect br = toScreenRect(row, scaleX, scaleY, offX, offY, fullScreenW, fullScreenH, 0.65f, 0.85f);
+                          if (bestBody >= 0.14f) {
+                              Rect br = toScreenRect(row, scaleX, scaleY, offX, offY, fullScreenW, fullScreenH, 0.70f, 0.90f);
                               if (br != null) outRes.bodyAndFemaleBoxes.add(br);
                           }
                       }
@@ -517,6 +597,7 @@ jobs:
           public class GhaadGuardService extends AccessibilityService {
               public static GhaadGuardService instance;
               public static volatile String activePkg = "";
+              public static volatile long pauseLockUntil = 0;
 
               private WindowManager windowManager;
               private CensorOverlayView overlayView;
@@ -530,6 +611,7 @@ jobs:
               private static class LockedBox {
                   Rect rect;
                   int[] outerBorderSignature;
+                  long createdAt;
               }
               private final List<LockedBox> activeLockedBoxes = new ArrayList<>();
               private volatile boolean userScrolled = false;
@@ -568,6 +650,7 @@ jobs:
 
                   FaceDetectorOptions opts = new FaceDetectorOptions.Builder()
                           .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+                          .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
                           .setMinFaceSize(0.03f)
                           .build();
                   faceDetector = FaceDetection.getClient(opts);
@@ -579,6 +662,12 @@ jobs:
                   mainHandler.postDelayed(scanLoop, 450);
               }
 
+              private boolean isBrowserApp(String pkg) {
+                  String p = pkg.toLowerCase();
+                  return p.contains("chrome") || p.contains("browser") || p.contains("opera")
+                          || p.contains("brave") || p.contains("firefox") || p.contains("sbrowser");
+              }
+
               private boolean isHomeOrSafeApp() {
                   try {
                       AccessibilityNodeInfo root = getRootInActiveWindow();
@@ -587,9 +676,7 @@ jobs:
                           if (rootPkg != null) {
                               activePkg = rootPkg.toString();
                           }
-                          String p = activePkg.toLowerCase();
-                          if (p.contains("chrome") || p.contains("browser") || p.contains("opera")
-                                  || p.contains("brave") || p.contains("firefox")) {
+                          if (isBrowserApp(activePkg)) {
                               String pageText = collectBrowserText(root, 0).toLowerCase();
                               boolean foundAdult = false;
                               for (String kw : ADULT_KEYWORDS) {
@@ -616,11 +703,11 @@ jobs:
               }
 
               private String collectBrowserText(AccessibilityNodeInfo node, int depth) {
-                  if (node == null || depth > 8) return "";
+                  if (node == null || depth > 10) return "";
                   StringBuilder sb = new StringBuilder();
                   if (node.getText() != null) sb.append(node.getText()).append(" ");
                   if (node.getContentDescription() != null) sb.append(node.getContentDescription()).append(" ");
-                  int count = Math.min(node.getChildCount(), 12);
+                  int count = Math.min(node.getChildCount(), 15);
                   for (int i = 0; i < count; i++) {
                       AccessibilityNodeInfo child = node.getChild(i);
                       if (child != null) {
@@ -644,7 +731,7 @@ jobs:
                       if (adultSiteDetectedInBrowser) {
                           int w = overlayView.getWidth() > 0 ? overlayView.getWidth() : 1080;
                           int h = overlayView.getHeight() > 0 ? overlayView.getHeight() : 2400;
-                          overlayView.setBoxes(Collections.singletonList(new Rect(0, 180, w, h)), true);
+                          overlayView.setBoxes(Collections.singletonList(new Rect(0, 160, w, h)), true);
                           mainHandler.postDelayed(this, 600);
                           return;
                       }
@@ -674,15 +761,15 @@ jobs:
                                   if (hwBmp != null) {
                                       int origW = hwBmp.getWidth();
                                       int origH = hwBmp.getHeight();
-                                      int smallW = Math.max(220, origW / 2);
-                                      int smallH = Math.max(220, origH / 2);
+                                      int smallW = Math.max(240, origW / 2);
+                                      int smallH = Math.max(240, origH / 2);
                                       Bitmap softBmp = hwBmp.copy(Bitmap.Config.ARGB_8888, false);
                                       hwBmp.recycle();
                                       hb.close();
 
                                       Bitmap scaledBmp = Bitmap.createScaledBitmap(softBmp, smallW, smallH, true);
                                       softBmp.recycle();
-                                      processFrameV25(scaledBmp, origW, origH);
+                                      processFrameV26(scaledBmp, origW, origH);
                                   } else {
                                       hb.close();
                                       isBusy = false;
@@ -694,11 +781,10 @@ jobs:
 
                           @Override
                           public void onFailure(int errorCode) {
-                              String p = activePkg.toLowerCase();
-                              if (p.contains("chrome") || p.contains("browser")) {
+                              if (isBrowserApp(activePkg)) {
                                   int w = overlayView.getWidth() > 0 ? overlayView.getWidth() : 1080;
                                   int h = overlayView.getHeight() > 0 ? overlayView.getHeight() : 2400;
-                                  mainHandler.post(() -> overlayView.setBoxes(Collections.singletonList(new Rect(0, 180, w, h)), true));
+                                  mainHandler.post(() -> overlayView.setBoxes(Collections.singletonList(new Rect(0, 160, w, h)), true));
                               }
                               isBusy = false;
                           }
@@ -708,12 +794,43 @@ jobs:
                   }
               }
 
-              private void processFrameV25(Bitmap bmp, int capW, int capH) {
+              // Detects Samsung Chrome Incognito / FLAG_SECURE where takeScreenshot returns a 100% black bitmap (02:36-03:13 in user video!)
+              private boolean isFlagSecureBlackScreenshot(Bitmap bmp) {
+                  int w = bmp.getWidth();
+                  int h = bmp.getHeight();
+                  int blackCount = 0, total = 0;
+                  for (int y = h / 5; y < h * 4 / 5; y += 14) {
+                      for (int x = w / 8; x < w * 7 / 8; x += 14) {
+                          total++;
+                          int px = bmp.getPixel(x, y);
+                          int R = (px >> 16) & 0xFF, G = (px >> 8) & 0xFF, B = px & 0xFF;
+                          if (R < 6 && G < 6 && B < 6) {
+                              blackCount++;
+                          }
+                      }
+                  }
+                  return total > 0 && (blackCount * 100 / total) >= 95;
+              }
+
+              private void processFrameV26(Bitmap bmp, int capW, int capH) {
                   final int screenW = overlayView.getWidth() > 0 ? overlayView.getWidth() : capW;
                   final int screenH = overlayView.getHeight() > 0 ? overlayView.getHeight() : capH;
                   final float scaleX = (float) screenW / bmp.getWidth();
                   final float scaleY = (float) screenH / bmp.getHeight();
+                  final long now = System.currentTimeMillis();
 
+                  // FIX FOR CHROME INCOGNITO (02:36-03:13):
+                  // If inside Chrome/Browser and screenshot is blacked out by Incognito FLAG_SECURE -> Block entire browser!
+                  if (isBrowserApp(activePkg) && isFlagSecureBlackScreenshot(bmp)) {
+                      bmp.recycle();
+                      mainHandler.post(() -> {
+                          overlayView.setBoxes(Collections.singletonList(new Rect(0, 160, screenW, screenH)), true);
+                          isBusy = false;
+                      });
+                      return;
+                  }
+
+                  // Expire old boxes after 1.6s or when scene border changes (Fixes stuck box at 00:50 & 02:23!)
                   synchronized (activeLockedBoxes) {
                       if (userScrolled) {
                           activeLockedBoxes.clear();
@@ -723,22 +840,30 @@ jobs:
                           while (it.hasNext()) {
                               LockedBox lb = it.next();
                               int[] curSig = sampleOuterBorder(bmp, lb.rect, scaleX, scaleY);
-                              if (isSceneChangedOutsideBox(lb.outerBorderSignature, curSig)) {
+                              if ((now - lb.createdAt > 1600) || isSceneChangedOutsideBox(lb.outerBorderSignature, curSig)) {
                                   it.remove();
                               }
                           }
                       }
                   }
 
-                  final DedicatedGenderAndBodyAI.NudeNetScanResult nnRes = genderBodyAI.scanScreenMultiTile(bmp, screenW, screenH);
+                  // Crop active video bounds (Fixes Fullscreen Landscape letterbox at 01:53-02:33!)
+                  final Rect activeBounds = genderBodyAI.findActiveVideoBounds(bmp);
 
+                  // 1. Run High-Res Multi-Tile NudeNet Scan
+                  final DedicatedGenderAndBodyAI.NudeNetScanResult nnRes = genderBodyAI.scanScreenMultiTile(bmp, activeBounds, screenW, screenH);
+
+                  // 2. Run V10 Bare-Skin Cluster Detector inside active video bounds (Catches 01:53-02:10 Dance/Belly/Bare-Back & Chrome videos!)
+                  final List<Rect> skinClusterBoxes = detectActiveVideoSkinClusters(bmp, activeBounds, screenW, screenH, scaleX, scaleY);
+
+                  // 3. Run ML Kit Face Detector + Dedicated YOLOv8-Gender Model
                   InputImage image = InputImage.fromBitmap(bmp, 0);
                   faceDetector.process(image)
                           .addOnSuccessListener(faces -> {
                               List<Rect> newlyDetected = new ArrayList<>();
                               List<Rect> maleSafeZones = new ArrayList<>();
-
-                              boolean isCloseCouple = areTwoFacesClose(faces);
+                              List<Rect> femaleFaceRects = new ArrayList<>();
+                              List<Rect> maleFaceRects = new ArrayList<>();
 
                               for (Face face : faces) {
                                   Rect fb = face.getBoundingBox();
@@ -746,10 +871,11 @@ jobs:
 
                                   float femaleProb = genderBodyAI.getFemaleProbability(bmp, fb);
                                   int chestSkinPct = getChestSkinPercentage(bmp, fb);
+                                  boolean wearingSunglassesAndHijab = hasSunglassesAndHijabWrap(bmp, face, fb);
 
-                                  float requiredProb = (chestSkinPct >= 16) ? 0.30f : ((chestSkinPct < 12) ? 0.74f : 0.56f);
+                                  float requiredProb = (chestSkinPct >= 16 || wearingSunglassesAndHijab) ? 0.28f : ((chestSkinPct < 10) ? 0.68f : 0.52f);
 
-                                  if (isCloseCouple || femaleProb >= requiredProb) {
+                                  if (femaleProb >= requiredProb || wearingSunglassesAndHijab) {
                                       int left = Math.max(0, (int) ((fb.left - fw * 0.85f) * scaleX));
                                       int top = Math.max(0, (int) ((fb.top - fh * 0.45f) * scaleY));
                                       int right = Math.min(screenW, (int) ((fb.right + fw * 0.85f) * scaleX));
@@ -757,44 +883,68 @@ jobs:
                                       if (bottom - top > (int) (screenH * 0.58f)) {
                                           bottom = top + (int) (screenH * 0.58f);
                                       }
-                                      newlyDetected.add(new Rect(left, top, right, bottom));
+                                      Rect fBox = new Rect(left, top, right, bottom);
+                                      femaleFaceRects.add(fBox);
+                                      newlyDetected.add(fBox);
                                   } else {
-                                      int mLeft = Math.max(0, (int) ((fb.left - fw * 1.4f) * scaleX));
+                                      // Confirmed Male Face (e.g. Qari Abu Rayhan & men at 00:03-00:10, Teacher at 00:53, Abu Tawha at 01:23)
+                                      Rect mScreen = new Rect(
+                                              (int) (fb.left * scaleX),
+                                              (int) (fb.top * scaleY),
+                                              (int) (fb.right * scaleX),
+                                              (int) (fb.bottom * scaleY)
+                                      );
+                                      maleFaceRects.add(mScreen);
+
+                                      int mLeft = Math.max(0, (int) ((fb.left - fw * 1.5f) * scaleX));
                                       int mTop = Math.max(0, (int) ((fb.top - fh * 0.4f) * scaleY));
-                                      int mRight = Math.min(screenW, (int) ((fb.right + fw * 1.4f) * scaleX));
-                                      int mBottom = Math.min(screenH, (int) ((fb.bottom + fh * 3.4f) * scaleY));
+                                      int mRight = Math.min(screenW, (int) ((fb.right + fw * 1.5f) * scaleX));
+                                      int mBottom = Math.min(screenH, (int) ((fb.bottom + fh * 3.5f) * scaleY));
                                       maleSafeZones.add(new Rect(mLeft, mTop, mRight, mBottom));
                                   }
                               }
 
-                              for (Rect nb : nnRes.bodyAndFemaleBoxes) {
-                                  boolean onSoloMale = false;
-                                  for (Rect mz : maleSafeZones) {
-                                      if (Rect.intersects(nb, mz)) {
-                                          onSoloMale = true;
-                                          break;
+                              // FIXED COUPLE CHECK (Fixes 00:06-00:10):
+                              // ONLY block two close faces if ONE is Female and ONE is Male! NEVER block two men standing together!
+                              for (Rect ff : femaleFaceRects) {
+                                  for (Rect mf : maleFaceRects) {
+                                      Rect expM = new Rect(mf.left - mf.width(), mf.top - mf.height() / 2, mf.right + mf.width(), mf.bottom + mf.height());
+                                      if (Rect.intersects(ff, expM)) {
+                                          Rect couple = new Rect(ff);
+                                          couple.union(mf);
+                                          newlyDetected.add(couple);
                                       }
                                   }
-                                  if (!onSoloMale) {
+                              }
+
+                              // Add NudeNet detections (outside solo male safe zones)
+                              for (Rect nb : nnRes.bodyAndFemaleBoxes) {
+                                  if (!intersectsAny(nb, maleSafeZones)) {
                                       newlyDetected.add(nb);
                                   }
                               }
 
+                              // Add V10 Skin Clusters (Cleavage, Bare Back 02:03, Lehenga Navel 01:56-02:06) outside solo male safe zones
+                              for (Rect sc : skinClusterBoxes) {
+                                  if (!intersectsAny(sc, maleSafeZones)) {
+                                      newlyDetected.add(sc);
+                                  }
+                              }
+
                               synchronized (activeLockedBoxes) {
+                                  for (Rect nd : newlyDetected) {
+                                      LockedBox lb = new LockedBox();
+                                      lb.rect = nd;
+                                      lb.outerBorderSignature = sampleOuterBorder(bmp, nd, scaleX, scaleY);
+                                      lb.createdAt = now;
+                                      activeLockedBoxes.add(lb);
+                                  }
+
                                   List<Rect> all = new ArrayList<>();
                                   for (LockedBox lb : activeLockedBoxes) {
                                       all.add(new Rect(lb.rect));
                                   }
-                                  all.addAll(newlyDetected);
-
                                   final List<Rect> merged = mergeBoxesCleanly(all, screenH);
-                                  activeLockedBoxes.clear();
-                                  for (Rect mr : merged) {
-                                      LockedBox lb = new LockedBox();
-                                      lb.rect = mr;
-                                      lb.outerBorderSignature = sampleOuterBorder(bmp, mr, scaleX, scaleY);
-                                      activeLockedBoxes.add(lb);
-                                  }
 
                                   mainHandler.post(() -> {
                                       if (!isHomeOrSafeApp()) {
@@ -813,15 +963,96 @@ jobs:
                           });
               }
 
-              private boolean areTwoFacesClose(List<Face> faces) {
-                  if (faces.size() < 2) return false;
-                  for (int i = 0; i < faces.size(); i++) {
-                      for (int j = i + 1; j < faces.size(); j++) {
-                          Rect a = faces.get(i).getBoundingBox();
-                          Rect b = faces.get(j).getBoundingBox();
-                          Rect exp = new Rect(a.left - a.width(), a.top - a.height() / 2, a.right + a.width(), a.bottom + a.height());
-                          if (Rect.intersects(exp, b)) return true;
+              // Catches girls wearing dark sunglasses + hijab (like 00:20-00:23 in user video!)
+              private boolean hasSunglassesAndHijabWrap(Bitmap bmp, Face face, Rect fb) {
+                  Float leftEye = face.getLeftEyeOpenProbability();
+                  Float rightEye = face.getRightEyeOpenProbability();
+                  boolean eyesHiddenBySunglasses = (leftEye != null && rightEye != null && leftEye < 0.25f && rightEye < 0.25f);
+                  if (!eyesHiddenBySunglasses) return false;
+
+                  int w = bmp.getWidth(), h = bmp.getHeight();
+                  int fw = fb.width(), fh = fb.height();
+                  int crownColor = bmp.getPixel(Math.min(w - 1, Math.max(0, fb.centerX())), Math.max(0, fb.top - fh / 6));
+                  int chinBelowColor = bmp.getPixel(Math.min(w - 1, Math.max(0, fb.centerX())), Math.min(h - 1, fb.bottom + fh / 3));
+
+                  // If scarf/hijab color above forehead matches the wrap below the chin (like the pink hijab at 00:20!)
+                  int diff = Math.abs(((crownColor >> 16) & 0xFF) - ((chinBelowColor >> 16) & 0xFF))
+                           + Math.abs(((crownColor >> 8) & 0xFF) - ((chinBelowColor >> 8) & 0xFF))
+                           + Math.abs((crownColor & 0xFF) - (chinBelowColor & 0xFF));
+                  return diff < 55 && !isSkinPixel(chinBelowColor);
+              }
+
+              // V10 Skin Cluster Engine inside Active Video Area (Catches 01:53-02:10 Dance/Bare-Back/Belly & Chrome videos!)
+              private List<Rect> detectActiveVideoSkinClusters(Bitmap bmp, Rect activeBounds, int screenW, int screenH, float scaleX, float scaleY) {
+                  List<Rect> boxes = new ArrayList<>();
+                  int startX = activeBounds.left, startY = activeBounds.top;
+                  int aw = activeBounds.width(), ah = activeBounds.height();
+                  int cols = 16, rows = 16;
+                  int cellW = aw / cols, cellH = ah / rows;
+                  if (cellW < 4 || cellH < 4) return boxes;
+
+                  boolean[][] grid = new boolean[rows][cols];
+                  for (int r = 1; r < rows - 1; r++) {
+                      for (int c = 1; c < cols - 1; c++) {
+                          int skin = 0, total = 0;
+                          for (int dy = 1; dy < cellH; dy += 2) {
+                              for (int dx = 1; dx < cellW; dx += 2) {
+                                  total++;
+                                  if (isSkinPixel(bmp.getPixel(startX + c * cellW + dx, startY + r * cellH + dy))) {
+                                      skin++;
+                                  }
+                              }
+                          }
+                          if (total > 0 && (skin * 100 / total) >= 45) {
+                              grid[r][c] = true;
+                          }
                       }
+                  }
+
+                  boolean[][] visited = new boolean[rows][cols];
+                  for (int r = 1; r < rows - 1; r++) {
+                      for (int c = 1; c < cols - 1; c++) {
+                          if (grid[r][c] && !visited[r][c]) {
+                              int minR = r, maxR = r, minC = c, maxC = c, count = 0;
+                              List<int[]> q = new ArrayList<>();
+                              q.add(new int[]{r, c});
+                              visited[r][c] = true;
+                              int idx = 0;
+                              while (idx < q.size()) {
+                                  int[] cur = q.get(idx++);
+                                  count++;
+                                  minR = Math.min(minR, cur[0]); maxR = Math.max(maxR, cur[0]);
+                                  minC = Math.min(minC, cur[1]); maxC = Math.max(maxC, cur[1]);
+                                  for (int dr = -1; dr <= 1; dr++) {
+                                      for (int dc = -1; dc <= 1; dc++) {
+                                          int nr = cur[0] + dr, nc = cur[1] + dc;
+                                          if (nr >= 1 && nr < rows - 1 && nc >= 1 && nc < cols - 1
+                                                  && grid[nr][nc] && !visited[nr][nc]) {
+                                              visited[nr][nc] = true;
+                                              q.add(new int[]{nr, nc});
+                                          }
+                                      }
+                                  }
+                              }
+                              if (count >= 3) {
+                                  int left = Math.max(0, (int) ((startX + (minC - 1) * cellW) * scaleX));
+                                  int top = Math.max(0, (int) ((startY + (minR - 1) * cellH) * scaleY));
+                                  int right = Math.min(screenW, (int) ((startX + (maxC + 2) * cellW) * scaleX));
+                                  int bottom = Math.min(screenH, (int) ((startY + (maxR + 2) * cellH) * scaleY));
+                                  boxes.add(new Rect(left, top, right, bottom));
+                              }
+                          }
+                      }
+                  }
+                  return boxes;
+              }
+
+              private boolean isSkinPixel(int px) {
+                  int R = (px >> 16) & 0xFF, G = (px >> 8) & 0xFF, B = px & 0xFF;
+                  if (R > 75 && G > 32 && B > 18 && R > G && G >= B && (R - G) >= 12 && (R - B) <= 125) {
+                      int Cr = 128 + ((112 * R - 93 * G - 18 * B) >> 8);
+                      int Cb = 128 + ((-37 * R - 74 * G + 112 * B) >> 8);
+                      return Cr >= 133 && Cr <= 174 && Cb >= 79 && Cb <= 126;
                   }
                   return false;
               }
@@ -838,16 +1069,17 @@ jobs:
                   for (int y = top; y <= bot; y += 2) {
                       for (int x = left; x <= right; x += 2) {
                           total++;
-                          int px = bmp.getPixel(x, y);
-                          int R = (px >> 16) & 0xFF, G = (px >> 8) & 0xFF, B = px & 0xFF;
-                          if (R > 75 && G > 32 && B > 18 && R > G && G >= B && (R - G) >= 12) {
-                              int Cr = 128 + ((112 * R - 93 * G - 18 * B) >> 8);
-                              int Cb = 128 + ((-37 * R - 74 * G + 112 * B) >> 8);
-                              if (Cr >= 133 && Cr <= 174 && Cb >= 79 && Cb <= 126) skin++;
-                          }
+                          if (isSkinPixel(bmp.getPixel(x, y))) skin++;
                       }
                   }
                   return total > 0 ? (skin * 100 / total) : 0;
+              }
+
+              private boolean intersectsAny(Rect target, List<Rect> zones) {
+                  for (Rect r : zones) {
+                      if (Rect.intersects(target, r)) return true;
+                  }
+                  return false;
               }
 
               private int[] sampleOuterBorder(Bitmap bmp, Rect screenRect, float scaleX, float scaleY) {
@@ -876,9 +1108,9 @@ jobs:
                       int diff = Math.abs(((c1 >> 16) & 0xFF) - ((c2 >> 16) & 0xFF))
                                + Math.abs(((c1 >> 8) & 0xFF) - ((c2 >> 8) & 0xFF))
                                + Math.abs((c1 & 0xFF) - (c2 & 0xFF));
-                      if (diff > 65) diffCount++;
+                      if (diff > 55) diffCount++;
                   }
-                  return diffCount >= 6;
+                  return diffCount >= 5;
               }
 
               private List<Rect> mergeBoxesCleanly(List<Rect> boxes, int screenH) {
@@ -924,6 +1156,25 @@ jobs:
                           overlayView.setBoxes(Collections.emptyList(), false);
                       }
                   }
+
+                  if (System.currentTimeMillis() < pauseLockUntil) return;
+
+                  // V10 Anti-Uninstall Guard (Only inside Settings / PackageInstaller)
+                  String pkg = activePkg.toLowerCase();
+                  if (pkg.equals("com.android.settings") || pkg.contains("packageinstaller")) {
+                      AccessibilityNodeInfo root = getRootInActiveWindow();
+                      if (root != null) {
+                          String text = collectBrowserText(root, 0).toLowerCase();
+                          root.recycle();
+                          if (text.contains("ghaad v26 shield")) {
+                              if (text.contains("uninstall") || text.contains("force stop")
+                                      || text.contains("deactivate") || text.contains("app info")) {
+                                  performGlobalAction(GLOBAL_ACTION_BACK);
+                                  performGlobalAction(GLOBAL_ACTION_HOME);
+                              }
+                          }
+                      }
+                  }
               }
 
               @Override
@@ -941,6 +1192,9 @@ jobs:
           package com.ghaad.shield;
 
           import android.app.Activity;
+          import android.app.admin.DevicePolicyManager;
+          import android.content.ComponentName;
+          import android.content.Context;
           import android.content.Intent;
           import android.graphics.Color;
           import android.os.Bundle;
@@ -949,9 +1203,10 @@ jobs:
           import android.widget.Button;
           import android.widget.LinearLayout;
           import android.widget.TextView;
+          import android.widget.Toast;
 
           public class MainActivity extends Activity {
-              private Button btnGuard;
+              private Button btnAdmin, btnGuard;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
@@ -964,20 +1219,46 @@ jobs:
                   layout.setPadding(60, 60, 60, 60);
 
                   TextView title = new TextView(this);
-                  title.setText("GHAAD V25.0 ULTIMATE\nYouTube + Chrome Porn/Cleavage AI");
+                  title.setText("GHAAD V26.0 FINAL\nYouTube + Chrome + V10 Lock");
                   title.setTextColor(Color.parseColor("#10b981"));
-                  title.setTextSize(21);
+                  title.setTextSize(22);
                   title.setGravity(Gravity.CENTER);
                   title.setPadding(0, 0, 0, 25);
+
+                  // Secret Owner Unlock: Hold title for 3 seconds to unlock Settings for 60s
+                  title.setOnLongClickListener(v -> {
+                      GhaadGuardService.pauseLockUntil = System.currentTimeMillis() + 60000;
+                      DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+                      ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
+                      if (dpm != null && dpm.isAdminActive(comp)) {
+                          dpm.removeActiveAdmin(comp);
+                      }
+                      Toast.makeText(this, "Owner Unlock Active for 60 seconds!", Toast.LENGTH_LONG).show();
+                      updateStatus();
+                      return true;
+                  });
                   layout.addView(title);
 
                   TextView sub = new TextView(this);
-                  sub.setText("• Fixed Java Build Import Error (100% Compiles!)\n• High-Res Dual-Tile NudeNet Scanner for Chrome\n• Blocks Adult Sites (Even in Incognito Tab!)\n• Blocks Side-Profile Kissing & Cleavage");
+                  sub.setText("• Fixed Multi-Male Group Bug (00:06 Qari Video)\n• Fixed Fullscreen Dance/Song Detection (01:53-02:10)\n• Blocks Chrome Incognito & Adult Videos (02:36)\n• Includes V10 Anti-Uninstall Lock");
                   sub.setTextColor(Color.parseColor("#cbd5e1"));
                   sub.setTextSize(14);
                   sub.setGravity(Gravity.CENTER);
                   sub.setPadding(0, 0, 0, 45);
                   layout.addView(sub);
+
+                  btnAdmin = new Button(this);
+                  btnAdmin.setOnClickListener(v -> {
+                      ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
+                      Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
+                      intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, comp);
+                      startActivity(intent);
+                  });
+                  layout.addView(btnAdmin);
+
+                  TextView space = new TextView(this);
+                  space.setHeight(30);
+                  layout.addView(space);
 
                   btnGuard = new Button(this);
                   btnGuard.setOnClickListener(v -> {
@@ -991,8 +1272,19 @@ jobs:
               @Override
               protected void onResume() {
                   super.onResume();
+                  updateStatus();
+              }
+
+              private voidUpdateStatus() {}
+
+              private void updateStatus() {
+                  DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+                  ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
+                  boolean s1 = dpm != null && dpm.isAdminActive(comp);
+                  btnAdmin.setText((s1 ? "✅ " : "❌ ") + "Step 1: Lock Uninstall (Device Admin)");
+
                   boolean s2 = GhaadGuardService.instance != null;
-                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Activate V25 Ultimate Shield");
+                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Step 2: Activate V26 Final Shield");
               }
           }
           EOF
@@ -1002,10 +1294,10 @@ jobs:
         run: gradle assembleDebug
 
       - name: Prepare APK File
-        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V25_Ultimate.apk
+        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V26_Final.apk
 
       - name: Upload Compiled APK
         uses: actions/upload-artifact@v4
         with:
-          name: Ghaad_V25_Ultimate_APK
-          path: Ghaad_V25_Ultimate.apk
+          name: Ghaad_V26_Final_APK
+          path: Ghaad_V26_Final.apk
