@@ -1,4 +1,4 @@
-name: Build Ghaad V21 Solid-Box APK
+name: Build Ghaad V22 Comfort Box APK
 
 on:
   push:
@@ -25,7 +25,7 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Generate V21 Solid-Box Android Project
+      - name: Generate V22 Comfort Box Android Project
         run: |
           mkdir -p android_build/app/src/main/java/com/ghaad/shield
           mkdir -p android_build/app/src/main/res/xml
@@ -51,7 +51,6 @@ jobs:
 
           target_path = 'android_build/app/src/main/assets/nudenet.onnx'
           onnx.save(model, target_path)
-          print("Saved verified ONNX model, size:", os.path.getsize(target_path))
           PYEOF
 
           cat << 'EOF' > android_build/settings.gradle
@@ -69,7 +68,7 @@ jobs:
                   mavenCentral()
               }
           }
-          rootProject.name = "GhaadShieldV21"
+          rootProject.name = "GhaadShieldV22"
           include ':app'
           EOF
 
@@ -95,20 +94,19 @@ jobs:
                   applicationId "com.ghaad.shield"
                   minSdk 24
                   targetSdk 33
-                  versionCode 35
-                  versionName "21.0"
+                  versionCode 40
+                  versionName "22.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
               aaptOptions {
-                  noCompress "onnx", "tflite"
+                  noCompress "onnx"
               }
           }
           dependencies {
               implementation 'androidx.appcompat:appcompat:1.6.1'
-              implementation 'com.google.mlkit:face-detection:16.1.6'
               implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.19.2'
           }
           EOF
@@ -121,13 +119,9 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
 
               <application
-                  android:label="Ghaad V21 Box Shield"
+                  android:label="Ghaad V22 Comfort"
                   android:extractNativeLibs="true"
                   android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
-
-                  <meta-data
-                      android:name="com.google.mlkit.vision.DEPENDENCIES"
-                      android:value="face"/>
 
                   <activity android:name=".MainActivity" android:exported="true">
                       <intent-filter>
@@ -153,7 +147,7 @@ jobs:
           cat << 'EOF' > android_build/app/src/main/res/xml/accessibility_config.xml
           <?xml version="1.0" encoding="utf-8"?>
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-              android:accessibilityEventTypes="typeWindowStateChanged|typeViewScrolled"
+              android:accessibilityEventTypes="typeWindowStateChanged"
               android:accessibilityFeedbackType="feedbackGeneric"
               android:canRetrieveWindowContent="true"
               android:canTakeScreenshot="true"
@@ -169,17 +163,16 @@ jobs:
           import android.graphics.Color;
           import android.graphics.Paint;
           import android.graphics.Rect;
+          import android.graphics.RectF;
           import android.view.View;
           import java.util.ArrayList;
           import java.util.List;
 
           public class CensorOverlayView extends View {
               private final List<Rect> blockedRects = new ArrayList<>();
-              private final Paint boxPaint = new Paint();
-              private final Paint borderPaint = new Paint();
+              private final Paint boxPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+              private final Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
               private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-              private final Paint badgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-              private String statusText = "";
 
               public CensorOverlayView(Context context) {
                   super(context);
@@ -189,43 +182,34 @@ jobs:
 
                   borderPaint.setColor(Color.rgb(220, 38, 38));
                   borderPaint.setStyle(Paint.Style.STROKE);
-                  borderPaint.setStrokeWidth(4f);
+                  borderPaint.setStrokeWidth(3f);
 
                   textPaint.setColor(Color.WHITE);
-                  textPaint.setTextSize(34f);
+                  textPaint.setTextSize(28f);
                   textPaint.setTextAlign(Paint.Align.CENTER);
                   textPaint.setFakeBoldText(true);
-
-                  badgePaint.setColor(Color.rgb(16, 185, 129));
-                  badgePaint.setTextSize(22f);
-                  badgePaint.setFakeBoldText(true);
               }
 
-              public synchronized void setBoxes(List<Rect> rects, String status) {
+              public synchronized void setBoxes(List<Rect> rects) {
                   blockedRects.clear();
                   if (rects != null) {
                       blockedRects.addAll(rects);
                   }
-                  statusText = status != null ? status : "";
                   postInvalidate();
               }
 
-              public synchronized void clearAll() {
-                  blockedRects.clear();
-                  statusText = "";
-                  postInvalidate();
+              public synchronized boolean hasBoxes() {
+                  return !blockedRects.isEmpty();
               }
 
               @Override
               protected synchronized void onDraw(Canvas canvas) {
                   super.onDraw(canvas);
                   for (Rect r : blockedRects) {
-                      canvas.drawRect(r, boxPaint);
-                      canvas.drawRect(r, borderPaint);
+                      RectF rf = new RectF(r);
+                      canvas.drawRoundRect(rf, 12f, 12f, boxPaint);
+                      canvas.drawRoundRect(rf, 12f, 12f, borderPaint);
                       canvas.drawText("BLOCKED", r.centerX(), r.centerY(), textPaint);
-                  }
-                  if (!statusText.isEmpty()) {
-                      canvas.drawText(statusText, 30, 105, badgePaint);
                   }
               }
           }
@@ -258,20 +242,18 @@ jobs:
               private String inputName;
               private boolean isLoaded = false;
 
-              public static class DetectionInfo {
-                  public List<Rect> femaleAndBodyBoxes = new ArrayList<>();
-                  public List<Rect> maleFaceBoxes = new ArrayList<>();
-              }
-
-              // Strictly Female & Exposed Body Classes ONLY (Excludes 12:FACE_MALE, 8:BELLY_COVERED, 9:FEET_COVERED, 10:ARMPITS_COVERED)
-              private static final int[] TARGET_CLASSES = {
-                  0, 1, 2, 3, 4, 6, 13, 16, 17
+              // ONLY Immodest/Exposed Female Body Parts (NO faces, NO hands, NO normal covered belly/feet/armpits!)
+              // 0: FEMALE_GENITALIA_COVERED, 2: BUTTOCKS_EXPOSED, 3: FEMALE_BREAST_EXPOSED,
+              // 4: FEMALE_GENITALIA_EXPOSED, 6: ANUS_EXPOSED, 13: BELLY_EXPOSED,
+              // 16: FEMALE_BREAST_COVERED (Bikini/Cleavage), 17: BUTTOCKS_COVERED
+              private static final int[] EXPOSED_BODY_CLASSES = {
+                  0, 2, 3, 4, 6, 13, 16, 17
               };
 
               public NudeNetClassifier(Context context) {
                   try {
                       env = OrtEnvironment.getEnvironment();
-                      File modelFile = new File(context.getFilesDir(), "nudenet_v21.onnx");
+                      File modelFile = new File(context.getFilesDir(), "nudenet_v22.onnx");
                       if (!modelFile.exists() || modelFile.length() < 1000000) {
                           InputStream is = context.getAssets().open("nudenet.onnx");
                           FileOutputStream fos = new FileOutputStream(modelFile);
@@ -292,6 +274,10 @@ jobs:
                   } catch (Exception ignored) {
                       isLoaded = false;
                   }
+              }
+
+              public boolean isReady() {
+                  return isLoaded && session != null;
               }
 
               private Rect findActiveVideoArea(Bitmap bmp) {
@@ -320,9 +306,9 @@ jobs:
                   return new Rect(0, topBar, w, botBar);
               }
 
-              public DetectionInfo analyze(Bitmap fullBmp, int screenW, int screenH) {
-                  DetectionInfo info = new DetectionInfo();
-                  if (!isLoaded || session == null) return info;
+              public List<Rect> detectImmodestyAndKissing(Bitmap fullBmp, int screenW, int screenH) {
+                  if (!isReady()) return Collections.emptyList();
+                  List<Rect> targetBoxes = new ArrayList<>();
                   try {
                       Rect activeRect = findActiveVideoArea(fullBmp);
                       Bitmap bmp = Bitmap.createBitmap(fullBmp, activeRect.left, activeRect.top, activeRect.width(), activeRect.height());
@@ -384,7 +370,7 @@ jobs:
                       } else {
                           tensor.close();
                           res.close();
-                          return info;
+                          return Collections.emptyList();
                       }
                       tensor.close();
                       res.close();
@@ -392,38 +378,87 @@ jobs:
                       float scaleX = (float) activeScreenW / unpadW;
                       float scaleY = (float) activeScreenH / unpadH;
 
+                      List<Rect> maleFaces = new ArrayList<>();
+                      List<Rect> femaleFaces = new ArrayList<>();
+                      List<Rect> bodyBoxes = new ArrayList<>();
+
                       for (int i = 0; i < preds.length; i++) {
                           float[] row = preds[i];
                           float maleScore = row[4 + 12];
-                          float femFaceScore = row[4 + 1];
+                          float femScore = row[4 + 1];
 
-                          // 1. Collect Male Faces (Class 12) so clothed men are 100% protected!
-                          if (maleScore >= 0.22f && maleScore > femFaceScore) {
-                              Rect mr = extractBox(row, scaleX, scaleY, offsetX, offsetY, screenW, screenH, 1.0f, 3.0f);
-                              if (mr != null) info.maleFaceBoxes.add(mr);
-                              continue;
+                          // Collect Male Faces (NEVER blocked alone, used to detect Kissing & protect men!)
+                          if (maleScore >= 0.24f && maleScore > femScore) {
+                              Rect mr = extractBox(row, scaleX, scaleY, offsetX, offsetY, screenW, screenH, 0.15f, 0.15f);
+                              if (mr != null) maleFaces.add(mr);
                           }
 
-                          // 2. Collect Female Faces & Exposed Body Parts -> Solid Full-Body Box!
-                          float bestTarget = 0f;
+                          // Collect Female Faces (NEVER blocked alone, ONLY blocked when kissing/touching a Male Face!)
+                          if (femScore >= 0.24f && femScore > maleScore) {
+                              Rect fr = extractBox(row, scaleX, scaleY, offsetX, offsetY, screenW, screenH, 0.15f, 0.15f);
+                              if (fr != null) femaleFaces.add(fr);
+                          }
+
+                          // Collect Exposed/Immodest Female Body Parts ONLY
+                          float bestBody = 0f;
                           int bestCls = -1;
-                          for (int cls : TARGET_CLASSES) {
-                              if (cls == 1 && !GhaadGuardService.blockFemaleFaces) continue;
-                              if (row[4 + cls] > bestTarget) {
-                                  bestTarget = row[4 + cls];
+                          for (int cls : EXPOSED_BODY_CLASSES) {
+                              if (row[4 + cls] > bestBody) {
+                                  bestBody = row[4 + cls];
                                   bestCls = cls;
                               }
                           }
 
-                          if (bestTarget >= 0.16f && bestTarget > maleScore) {
-                              float padX = (bestCls == 1) ? 1.15f : 0.75f;
-                              float padY = (bestCls == 1) ? 3.20f : 1.10f;
-                              Rect tr = extractBox(row, scaleX, scaleY, offsetX, offsetY, screenW, screenH, padX, padY);
-                              if (tr != null) info.femaleAndBodyBoxes.add(tr);
+                          float thresh = (bestCls == 16 || bestCls == 17) ? 0.28f : 0.20f;
+                          if (bestBody >= thresh) {
+                              Rect br = extractBox(row, scaleX, scaleY, offsetX, offsetY, screenW, screenH, 0.45f, 0.45f);
+                              if (br != null) bodyBoxes.add(br);
+                          }
+                      }
+
+                      // 1. Add Exposed Body Parts (unless on a solo clothed man)
+                      for (Rect bb : bodyBoxes) {
+                          if (!isOnSoloMan(bb, maleFaces, femaleFaces)) {
+                              targetBoxes.add(bb);
+                          }
+                      }
+
+                      // 2. Check Male + Female Kissing / Intimate Position:
+                      for (Rect ff : femaleFaces) {
+                          int fw = ff.width();
+                          int fh = ff.height();
+                          Rect intimateZone = new Rect(
+                                  ff.left - (int) (fw * 1.1f),
+                                  ff.top - (int) (fh * 0.6f),
+                                  ff.right + (int) (fw * 1.1f),
+                                  ff.bottom + (int) (fh * 1.2f)
+                          );
+                          for (Rect mf : maleFaces) {
+                              if (Rect.intersects(intimateZone, mf)) {
+                                  // Kissing / Intimate embrace detected! Block the couple!
+                                  Rect couple = new Rect(ff);
+                                  couple.union(mf);
+                                  couple.inset(-fw / 2, -fh / 2);
+                                  couple.left = Math.max(0, couple.left);
+                                  couple.top = Math.max(0, couple.top);
+                                  couple.right = Math.min(screenW, couple.right);
+                                  couple.bottom = Math.min(screenH, couple.bottom + fh);
+                                  targetBoxes.add(couple);
+                              }
                           }
                       }
                   } catch (Exception ignored) {}
-                  return info;
+                  return targetBoxes;
+              }
+
+              private boolean isOnSoloMan(Rect bodyBox, List<Rect> maleFaces, List<Rect> femaleFaces) {
+                  if (!femaleFaces.isEmpty()) return false;
+                  for (Rect mf : maleFaces) {
+                      int mw = mf.width(), mh = mf.height();
+                      Rect manTorso = new Rect(mf.left - mw * 2, mf.top, mf.right + mw * 2, mf.bottom + mh * 4);
+                      if (Rect.intersects(bodyBox, manTorso)) return true;
+                  }
+                  return false;
               }
 
               private Rect extractBox(float[] row, float scaleX, float scaleY, int offX, int offY, int screenW, int screenH, float padX, float padY) {
@@ -440,9 +475,6 @@ jobs:
                   int t = Math.max(0, offY + Math.round((cy - h / 2f) * scaleY) - py);
                   int r = Math.min(screenW, offX + Math.round((cx + w / 2f) * scaleX) + px);
                   int b = Math.min(screenH, offY + Math.round((cy + h / 2f) * scaleY) + py);
-                  if (b - t > (int) (screenH * 0.65f)) {
-                      b = t + (int) (screenH * 0.65f);
-                  }
                   return new Rect(l, t, r, b);
               }
           }
@@ -467,7 +499,7 @@ jobs:
           import android.view.accessibility.AccessibilityNodeInfo;
 
           import java.util.ArrayList;
-          import java.util.Iterator;
+          import java.util.Collections;
           import java.util.List;
           import java.util.concurrent.ExecutorService;
           import java.util.concurrent.Executors;
@@ -475,7 +507,6 @@ jobs:
           public class GhaadGuardService extends AccessibilityService {
               public static GhaadGuardService instance;
               public static volatile String activePkg = "";
-              public static volatile boolean blockFemaleFaces = true;
 
               private WindowManager windowManager;
               private CensorOverlayView overlayView;
@@ -484,14 +515,6 @@ jobs:
               private ExecutorService executor;
               private volatile boolean isBusy = false;
               private long busyStartTime = 0;
-
-              private static class TrackedBox {
-                  Rect rect;
-                  int[] borderColors;
-                  long timestamp;
-              }
-              private final List<TrackedBox> lockedBoxes = new ArrayList<>();
-              private volatile boolean clearOnScroll = false;
 
               @Override
               protected void onServiceConnected() {
@@ -524,7 +547,7 @@ jobs:
                   mainHandler.postDelayed(scanLoop, 450);
               }
 
-              private boolean isCurrentScreenSafeLauncherOrSystem() {
+              private boolean isSafeLauncherOrSystem() {
                   try {
                       AccessibilityNodeInfo root = getRootInActiveWindow();
                       if (root != null) {
@@ -548,9 +571,8 @@ jobs:
               private final Runnable scanLoop = new Runnable() {
                   @Override
                   public void run() {
-                      if (isCurrentScreenSafeLauncherOrSystem()) {
-                          lockedZonesClear();
-                          overlayView.clearAll();
+                      if (isSafeLauncherOrSystem()) {
+                          overlayView.setBoxes(Collections.emptyList());
                           mainHandler.postDelayed(this, 400);
                           return;
                       }
@@ -559,26 +581,27 @@ jobs:
                           isBusy = false;
                       }
 
-                      if (!isBusy && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                      if (!isBusy && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && nudeNet != null && nudeNet.isReady()) {
                           isBusy = true;
                           busyStartTime = System.currentTimeMillis();
-                          captureWithoutBlinking();
+                          // Peek for 12ms so black box NEVER blinds the screenshot ("All-or-Nothing" fix!)
+                          if (overlayView.hasBoxes()) {
+                              overlayView.setAlpha(0f);
+                              mainHandler.postDelayed(() -> grabCleanScreen(), 12);
+                          } else {
+                              grabCleanScreen();
+                          }
                       }
                       mainHandler.postDelayed(this, 1020);
                   }
               };
 
-              private void lockedZonesClear() {
-                  synchronized (lockedBoxes) {
-                      lockedBoxes.clear();
-                  }
-              }
-
-              private void captureWithoutBlinking() {
+              private void grabCleanScreen() {
                   try {
                       takeScreenshot(Display.DEFAULT_DISPLAY, executor, new TakeScreenshotCallback() {
                           @Override
                           public void onSuccess(ScreenshotResult result) {
+                              mainHandler.post(() -> overlayView.setAlpha(1f));
                               try {
                                   HardwareBuffer hb = result.getHardwareBuffer();
                                   ColorSpace cs = result.getColorSpace();
@@ -594,123 +617,45 @@ jobs:
 
                                       Bitmap smallBmp = Bitmap.createScaledBitmap(softBmp, smallW, smallH, true);
                                       softBmp.recycle();
-                                      processFrameSolidBox(smallBmp, origW, origH);
+
+                                      int screenW = overlayView.getWidth() > 0 ? overlayView.getWidth() : origW;
+                                      int screenH = overlayView.getHeight() > 0 ? overlayView.getHeight() : origH;
+
+                                      List<Rect> boxes = nudeNet.detectImmodestyAndKissing(smallBmp, screenW, screenH);
+                                      smallBmp.recycle();
+
+                                      final List<Rect> merged = mergeOverlapping(boxes);
+                                      mainHandler.post(() -> {
+                                          if (!isSafeLauncherOrSystem()) {
+                                              overlayView.setBoxes(merged);
+                                          } else {
+                                              overlayView.setBoxes(Collections.emptyList());
+                                          }
+                                          isBusy = false;
+                                      });
                                   } else {
                                       hb.close();
                                       isBusy = false;
                                   }
                               } catch (Exception e) {
+                                  mainHandler.post(() -> overlayView.setAlpha(1f));
                                   isBusy = false;
                               }
                           }
 
                           @Override
                           public void onFailure(int errorCode) {
+                              mainHandler.post(() -> overlayView.setAlpha(1f));
                               isBusy = false;
                           }
                       });
                   } catch (Exception e) {
+                      overlayView.setAlpha(1f);
                       isBusy = false;
                   }
               }
 
-              private void processFrameSolidBox(Bitmap smallBmp, int capW, int capH) {
-                  final int screenW = overlayView.getWidth() > 0 ? overlayView.getWidth() : capW;
-                  final int screenH = overlayView.getHeight() > 0 ? overlayView.getHeight() : capH;
-                  final float scaleX = (float) screenW / smallBmp.getWidth();
-                  final float scaleY = (float) screenH / smallBmp.getHeight();
-                  final long now = System.currentTimeMillis();
-
-                  synchronized (lockedBoxes) {
-                      if (clearOnScroll) {
-                          lockedBoxes.clear();
-                          clearOnScroll = false;
-                      } else {
-                          Iterator<TrackedBox> it = lockedBoxes.iterator();
-                          while (it.hasNext()) {
-                              TrackedBox tb = it.next();
-                              int[] curBorder = sampleOuterBorder(smallBmp, tb.rect, scaleX, scaleY);
-                              if (isBorderChanged(tb.borderColors, curBorder) || (now - tb.timestamp > 3500)) {
-                                  it.remove();
-                              }
-                          }
-                      }
-                  }
-
-                  NudeNetClassifier.DetectionInfo nnInfo = (nudeNet != null)
-                          ? nudeNet.analyze(smallBmp, screenW, screenH)
-                          : new NudeNetClassifier.DetectionInfo();
-
-                  synchronized (lockedBoxes) {
-                      for (Rect r : nnInfo.femaleAndBodyBoxes) {
-                          if (!intersectsAny(r, nnInfo.maleFaceBoxes)) {
-                              TrackedBox tb = new TrackedBox();
-                              tb.rect = r;
-                              tb.borderColors = sampleOuterBorder(smallBmp, r, scaleX, scaleY);
-                              tb.timestamp = now;
-                              lockedBoxes.add(tb);
-                          }
-                      }
-
-                      List<Rect> combined = new ArrayList<>();
-                      for (TrackedBox tb : lockedBoxes) {
-                          combined.add(new Rect(tb.rect));
-                      }
-                      final List<Rect> mergedBoxes = mergeOverlapping(combined, screenH);
-
-                      lockedBoxes.clear();
-                      for (Rect mr : mergedBoxes) {
-                          TrackedBox tb = new TrackedBox();
-                          tb.rect = mr;
-                          tb.borderColors = sampleOuterBorder(smallBmp, mr, scaleX, scaleY);
-                          tb.timestamp = now;
-                          lockedBoxes.add(tb);
-                      }
-
-                      mainHandler.post(() -> {
-                          if (!isCurrentScreenSafeLauncherOrSystem()) {
-                              overlayView.setBoxes(mergedBoxes, "● V21 BOX ACTIVE");
-                          } else {
-                              overlayView.clearAll();
-                          }
-                          isBusy = false;
-                      });
-                  }
-                  smallBmp.recycle();
-              }
-
-              private int[] sampleOuterBorder(Bitmap bmp, Rect screenRect, float scaleX, float scaleY) {
-                  int w = bmp.getWidth(), h = bmp.getHeight();
-                  int l = Math.max(2, (int) (screenRect.left / scaleX) - 6);
-                  int t = Math.max(2, (int) (screenRect.top / scaleY) - 6);
-                  int r = Math.min(w - 3, (int) (screenRect.right / scaleX) + 6);
-                  int b = Math.min(h - 3, (int) (screenRect.bottom / scaleY) + 6);
-
-                  int[] samples = new int[12];
-                  int idx = 0;
-                  for (int i = 1; i <= 3; i++) {
-                      samples[idx++] = bmp.getPixel(l + (r - l) * i / 4, t);
-                      samples[idx++] = bmp.getPixel(l + (r - l) * i / 4, b);
-                      samples[idx++] = bmp.getPixel(l, t + (b - t) * i / 4);
-                      samples[idx++] = bmp.getPixel(r, t + (b - t) * i / 4);
-                  }
-                  return samples;
-              }
-
-              private boolean isBorderChanged(int[] oldB, int[] newB) {
-                  if (oldB == null || newB == null || oldB.length != newB.length) return true;
-                  int changed = 0;
-                  for (int i = 0; i < oldB.length; i++) {
-                      int c1 = oldB[i], c2 = newB[i];
-                      int diff = Math.abs(((c1 >> 16) & 0xFF) - ((c2 >> 16) & 0xFF))
-                               + Math.abs(((c1 >> 8) & 0xFF) - ((c2 >> 8) & 0xFF))
-                               + Math.abs((c1 & 0xFF) - (c2 & 0xFF));
-                      if (diff > 60) changed++;
-                  }
-                  return changed >= 5;
-              }
-
-              private List<Rect> mergeOverlapping(List<Rect> boxes, int screenH) {
+              private List<Rect> mergeOverlapping(List<Rect> boxes) {
                   if (boxes.size() <= 1) return boxes;
                   List<Rect> merged = new ArrayList<>(boxes);
                   boolean changed = true;
@@ -721,14 +666,10 @@ jobs:
                               Rect a = merged.get(i);
                               Rect b = merged.get(j);
                               if (Rect.intersects(a, b)) {
-                                  Rect u = new Rect(a);
-                                  u.union(b);
-                                  if (u.height() < (int) (screenH * 0.68f)) {
-                                      merged.set(i, u);
-                                      merged.remove(j);
-                                      changed = true;
-                                      break;
-                                  }
+                                  a.union(b);
+                                  merged.remove(j);
+                                  changed = true;
+                                  break;
                               }
                           }
                           if (changed) break;
@@ -737,27 +678,16 @@ jobs:
                   return merged;
               }
 
-              private boolean intersectsAny(Rect target, List<Rect> zones) {
-                  for (Rect r : zones) {
-                      if (Rect.intersects(target, r)) return true;
-                  }
-                  return false;
-              }
-
               @Override
               public void onAccessibilityEvent(AccessibilityEvent event) {
                   if (event == null) return;
-                  if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
-                      clearOnScroll = true;
-                  }
                   if (event.getPackageName() != null) {
                       String pkg = event.getPackageName().toString();
                       if (!pkg.contains("systemui")) {
                           activePkg = pkg;
                       }
-                      if (isCurrentScreenSafeLauncherOrSystem()) {
-                          lockedZonesClear();
-                          overlayView.clearAll();
+                      if (isSafeLauncherOrSystem()) {
+                          overlayView.setBoxes(Collections.emptyList());
                       }
                   }
               }
@@ -787,7 +717,7 @@ jobs:
           import android.widget.TextView;
 
           public class MainActivity extends Activity {
-              private Button btnGuard, btnFaceToggle;
+              private Button btnGuard;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
@@ -800,7 +730,7 @@ jobs:
                   layout.setPadding(60, 60, 60, 60);
 
                   TextView title = new TextView(this);
-                  title.setText("GHAAD V21.0 SOLID BOX\nSteady Black Box AI Blocker");
+                  title.setText("GHAAD V22.0 COMFORT\nImmodest Body & Kissing Blocker");
                   title.setTextColor(Color.parseColor("#10b981"));
                   title.setTextSize(22);
                   title.setGravity(Gravity.CENTER);
@@ -808,7 +738,7 @@ jobs:
                   layout.addView(title);
 
                   TextView sub = new TextView(this);
-                  sub.setText("• Restored Rock-Solid Black Bounding Boxes!\n• Strictly Ignores Men, Hands & Speakers\n• Works in Portrait & Fullscreen Landscape");
+                  sub.setText("• Never Blocks Normal Faces, Hands, or Men\n• Blocks ONLY Exposed Female Body Parts\n• Blocks Male-Female Kissing / Intimate Scenes\n• 100% Comfortable for Daily Video Watching");
                   sub.setTextColor(Color.parseColor("#cbd5e1"));
                   sub.setTextSize(14);
                   sub.setGravity(Gravity.CENTER);
@@ -821,32 +751,14 @@ jobs:
                   });
                   layout.addView(btnGuard);
 
-                  TextView space = new TextView(this);
-                  space.setHeight(30);
-                  layout.addView(space);
-
-                  btnFaceToggle = new Button(this);
-                  btnFaceToggle.setOnClickListener(v -> {
-                      GhaadGuardService.blockFemaleFaces = !GhaadGuardService.blockFemaleFaces;
-                      updateStatus();
-                  });
-                  layout.addView(btnFaceToggle);
-
                   setContentView(layout);
               }
 
               @Override
               protected void onResume() {
                   super.onResume();
-                  updateStatus();
-              }
-
-              private void updateStatus() {
                   boolean s2 = GhaadGuardService.instance != null;
-                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Step 1: Activate V21 Solid-Box Shield");
-
-                  boolean f1 = GhaadGuardService.blockFemaleFaces;
-                  btnFaceToggle.setText((f1 ? "✅ ON: " : "⬜ OFF: ") + "Block Female Face (Class 1)");
+                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Activate V22 Comfort Shield");
               }
           }
           EOF
@@ -856,10 +768,10 @@ jobs:
         run: gradle assembleDebug
 
       - name: Prepare APK File
-        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V21_SolidBox.apk
+        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V22_Comfort.apk
 
       - name: Upload Compiled APK
         uses: actions/upload-artifact@v4
         with:
-          name: Ghaad_V21_SolidBox_APK
-          path: Ghaad_V21_SolidBox.apk
+          name: Ghaad_V22_Comfort_APK
+          path: Ghaad_V22_Comfort.apk
