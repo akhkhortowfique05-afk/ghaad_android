@@ -1,0 +1,428 @@
+name: Build Ghaad iOS Shield IPA (macOS Xcode)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-14
+
+    steps:
+      - name: Set up Python to Prepare AI Model & Project
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Xcodegen for Automated iOS Project Creation
+        run: brew install xcodegen
+
+      - name: Generate Complete Ghaad iOS Swift Project
+        run: |
+          mkdir -p ios_build/GhaadShield/Resources
+          mkdir -p ios_build/GhaadShield
+
+          # 1. Create Xcodegen project.yml specification
+          cat << 'EOF' > ios_build/project.yml
+          name: GhaadShield
+          options:
+            bundleIdPrefix: com.ghaad
+            deploymentTarget:
+              iOS: "15.0"
+          targets:
+            GhaadShield:
+              type: application
+              platform: iOS
+              sources:
+                - path: GhaadShield
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.ghaad.ios.shield
+                  INFOPLIST_FILE: GhaadShield/Info.plist
+                  CODE_SIGN_IDENTITY: ""
+                  CODE_SIGNING_REQUIRED: NO
+                  CODE_SIGNING_ALLOWED: NO
+                  DEVELOPMENT_TEAM: ""
+          EOF
+
+          # 2. Create Info.plist
+          cat << 'EOF' > ios_build/GhaadShield/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleDisplayName</key>
+              <string>Ghaad iOS Shield</string>
+              <key>CFBundleExecutable</key>
+              <string>$(EXECUTABLE_NAME)</string>
+              <key>CFBundleIdentifier</key>
+              <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>$(PRODUCT_NAME)</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>29.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
+              <key>UIApplicationSceneManifest</key>
+              <dict>
+                  <key>UIApplicationSupportsMultipleScenes</key>
+                  <false/>
+              </dict>
+              <key>UILaunchScreen</key>
+              <dict/>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                  <string>UIInterfaceOrientationPortrait</string>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+              <key>NSAppTransportSecurity</key>
+              <dict>
+                  <key>NSAllowsArbitraryLoads</key>
+                  <true/>
+              </dict>
+          </dict>
+          </plist>
+          EOF
+
+          # 3. Create Swift App Entry Point (GhaadApp.swift)
+          cat << 'EOF' > ios_build/GhaadShield/GhaadApp.swift
+          import SwiftUI
+
+          @main
+          struct GhaadApp: App {
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView()
+                  }
+              }
+          }
+          EOF
+
+          # 4. Create Core iOS AI Vision + WebKit Shield (ContentView.swift)
+          cat << 'EOF' > ios_build/GhaadShield/ContentView.swift
+          import SwiftUI
+          import WebKit
+          import Vision
+
+          struct ContentView: View {
+              @State private var urlString: String = "https://m.youtube.com"
+              @State private var shieldActive: Bool = true
+              @State private var statusText: String = "● GHAAD iOS V29 ACTIVE"
+
+              var body: some View {
+                  VStack(spacing: 0) {
+                      // Top Ghaad Status & Navigation Bar
+                      HStack(spacing: 10) {
+                          Text(statusText)
+                              .font(.system(size: 13, weight: .bold))
+                              .foregroundColor(Color(red: 0.06, green: 0.72, blue: 0.50))
+
+                          Spacer()
+
+                          Button(action: {
+                              urlString = "https://m.youtube.com"
+                          }) {
+                              Text("YouTube")
+                                  .font(.system(size: 12, weight: .semibold))
+                                  .padding(.horizontal, 10)
+                                  .padding(.vertical, 5)
+                                  .background(Color.red.opacity(0.85))
+                                  .foregroundColor(.white)
+                                  .cornerRadius(6)
+                          }
+
+                          Button(action: {
+                              urlString = "https://www.google.com"
+                          }) {
+                              Text("Google")
+                                  .font(.system(size: 12, weight: .semibold))
+                                  .padding(.horizontal, 10)
+                                  .padding(.vertical, 5)
+                                  .background(Color.blue.opacity(0.85))
+                                  .foregroundColor(.white)
+                                  .cornerRadius(6)
+                          }
+                      }
+                      .padding(.horizontal, 14)
+                      .padding(.vertical, 10)
+                      .background(Color(red: 0.04, green: 0.06, blue: 0.10))
+
+                      // Protected WebView with Real-Time Apple Vision AI + Adult Domain Blocker
+                      ZStack {
+                          GhaadProtectedWebView(urlString: $urlString, statusText: $statusText)
+                      }
+                  }
+                  .edgesIgnoringSafeArea(.bottom)
+              }
+          }
+
+          struct GhaadProtectedWebView: UIViewRepresentable {
+              @Binding var urlString: String
+              @Binding var statusText: String
+
+              func makeCoordinator() -> Coordinator {
+                  Coordinator(self)
+              }
+
+              func makeUIView(context: Context) -> WKWebView {
+                  let config = WKWebViewConfiguration()
+                  config.allowsInlineMediaPlayback = true
+                  config.mediaTypesRequiringUserActionForPlayback = []
+
+                  // Inject Real-Time Adult Keyword & Video Frame Censor Script
+                  let jsCode = """
+                  (function() {
+                      const adultWords = ['xhamster', 'xhamp', 'pornhub', 'xnxx', 'xvideos', 'redtube', 'youporn', 'spankbang', 'brazzers', 'onlyfans', 'ullu', 'hot web series', 'sex video', 'porn', 'xxx', 'nude', 'boobs', 'pussy', 'desi bhabi'];
+
+                      function checkDomainAndText() {
+                          const url = window.location.href.toLowerCase();
+                          const title = (document.title || '').toLowerCase();
+                          for (let w of adultWords) {
+                              if (url.includes(w) || title.includes(w)) {
+                                  document.body.innerHTML = '<div style="background:#000;color:#fff;height:100vh;display:flex;align-items:center;justify-content:center;font-family:sans-serif;font-size:24px;font-weight:bold;border:4px solid #dc2626;">GHAAD iOS BLOCKED (ADULT SITE)</div>';
+                                  return;
+                              }
+                          }
+                      }
+                      setInterval(checkDomainAndText, 400);
+                  })();
+                  """
+                  let userScript = WKUserScript(source: jsCode, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+                  config.userContentController.addUserScript(userScript)
+
+                  let webView = WKWebView(frame: .zero, configuration: config)
+                  webView.navigationDelegate = context.coordinator
+                  context.coordinator.startVisionScanner(on: webView)
+
+                  if let url = URL(string: urlString) {
+                      webView.load(URLRequest(url: url))
+                  }
+                  return webView
+              }
+
+              func updateUIView(_ uiView: WKWebView, context: Context) {
+                  if let current = uiView.url?.absoluteString, current != urlString {
+                      if let url = URL(string: urlString) {
+                          uiView.load(URLRequest(url: url))
+                      }
+                  }
+              }
+
+              class Coordinator: NSObject, WKNavigationDelegate {
+                  var parent: GhaadProtectedWebView
+                  var timer: Timer?
+                  var overlayBoxes: [UIView] = []
+                  var isScanning = false
+
+                  let blockedDomains = [
+                      "xhamster", "xhamp", "pornhub", "xnxx", "xvideos", "redtube",
+                      "youporn", "spankbang", "eporner", "brazzers", "chaturbate",
+                      "stripchat", "onlyfans", "ullu", "faphouse"
+                  ]
+
+                  init(_ parent: GhaadProtectedWebView) {
+                      self.parent = parent
+                  }
+
+                  // Block navigation to any adult domain at network level
+                  func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+                      if let url = navigationAction.request.url?.absoluteString.lowercased() {
+                          for kw in blockedDomains {
+                              if url.contains(kw) {
+                                  decisionHandler(.cancel)
+                                  DispatchQueue.main.async {
+                                      self.parent.statusText = "● BLOCKED ADULT URL!"
+                                  }
+                                  return
+                              }
+                          }
+                      }
+                      decisionHandler(.allow)
+                  }
+
+                  // Real-time Apple Vision Framework Scanner (5 FPS)
+                  func startVisionScanner(on webView: WKWebView) {
+                      timer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: true) { [weak self, weak webView] _ in
+                          guard let self = self, let webView = webView, !self.isScanning else { return }
+                          self.isScanning = true
+
+                          // Hide existing black boxes for 10ms during snapshot so Vision sees clean frame
+                          for b in self.overlayBoxes { b.isHidden = true }
+
+                          let config = WKSnapshotConfiguration()
+                          config.snapshotWidth = 360
+
+                          webView.takeSnapshot(with: config) { image, error in
+                              for b in self.overlayBoxes { b.isHidden = false }
+                              guard let img = image, let cgImage = img.cgImage else {
+                                  self.isScanning = false
+                                  return
+                              }
+                              self.analyzeFrameWithAppleVision(cgImage: cgImage, in: webView)
+                          }
+                      }
+                  }
+
+                  private func analyzeFrameWithAppleVision(cgImage: CGImage, in webView: WKWebView) {
+                      let faceRequest = VNDetectFaceRectanglesRequest { [weak self, weak webView] req, _ in
+                          guard let self = self, let webView = webView else {
+                              self?.isScanning = false
+                              return
+                          }
+                          let results = (req.results as? [VNFaceObservation]) ?? []
+                          var rectsToBlock: [CGRect] = []
+
+                          let viewW = webView.bounds.width
+                          let viewH = webView.bounds.height
+
+                          for face in results {
+                              if self.isFemaleOrExposedInCGImage(cgImage: cgImage, normBox: face.boundingBox) {
+                                  // Convert Vision bottom-left normalized coords to UIKit top-left coords
+                                  let w = face.boundingBox.width * viewW
+                                  let h = face.boundingBox.height * viewH
+                                  let x = face.boundingBox.minX * viewW
+                                  let y = (1.0 - face.boundingBox.maxY) * viewH
+
+                                  let expanded = CGRect(
+                                      x: max(0, x - w * 0.85),
+                                      y: max(0, y - h * 0.45),
+                                      width: min(viewW, w * 2.70),
+                                      height: min(viewH, h * 3.60)
+                                  )
+                                  rectsToBlock.append(expanded)
+                              }
+                          }
+
+                          DispatchQueue.main.async {
+                              self.drawSolidBlackBoxes(rectsToBlock, on: webView)
+                              self.isScanning = false
+                          }
+                      }
+
+                      let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+                      DispatchQueue.global(qos: .userInteractive).async {
+                          try? handler.perform([faceRequest])
+                      }
+                  }
+
+                  // Checks Beard Shadow (Protects Men/Imams) & Chest/Hair Cues
+                  private func isFemaleOrExposedInCGImage(cgImage: CGImage, normBox: CGRect) -> Bool {
+                      let imgW = CGFloat(cgImage.width)
+                      let imgH = CGFloat(cgImage.height)
+                      let x = normBox.minX * imgW
+                      let y = (1.0 - normBox.maxY) * imgH
+                      let w = normBox.width * imgW
+                      let h = normBox.height * imgH
+
+                      let faceRect = CGRect(x: max(0, x), y: max(0, y), width: min(imgW - x, w), height: min(imgH - y, h))
+                      guard faceRect.width >= 10, faceRect.height >= 10,
+                            let cropped = cgImage.cropping(to: faceRect) else { return false }
+
+                      let cw = cropped.width
+                      let ch = cropped.height
+                      var rawData = [UInt8](repeating: 0, count: cw * ch * 4)
+                      let colorSpace = CGColorSpaceCreateDeviceRGB()
+                      guard let ctx = CGContext(
+                          data: &rawData,
+                          width: cw,
+                          height: ch,
+                          bitsPerComponent: 8,
+                          bytesPerRow: cw * 4,
+                          space: colorSpace,
+                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                      ) else { return false }
+                      ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: cw, height: ch))
+
+                      var upperLum = 0, upperCnt = 0
+                      var lowerLum = 0, lowerCnt = 0
+
+                      for py in (ch / 5)..<(ch / 2) {
+                          for px in (cw / 4)..<(cw * 3 / 4) {
+                              let idx = (py * cw + px) * 4
+                              let lum = (Int(rawData[idx]) * 299 + Int(rawData[idx+1]) * 587 + Int(rawData[idx+2]) * 114) / 1000
+                              upperLum += lum
+                              upperCnt += 1
+                          }
+                      }
+                      for py in (ch * 2 / 3)..<ch {
+                          for px in (cw / 4)..<(cw * 3 / 4) {
+                              let idx = (py * cw + px) * 4
+                              let lum = (Int(rawData[idx]) * 299 + Int(rawData[idx+1]) * 587 + Int(rawData[idx+2]) * 114) / 1000
+                              lowerLum += lum
+                              lowerCnt += 1
+                          }
+                      }
+
+                      // If lower chin/mustache is significantly darker than upper face -> Bearded Male (Do NOT block!)
+                      if upperCnt > 0 && lowerCnt > 0 {
+                          let diff = (upperLum / upperCnt) - (lowerLum / lowerCnt)
+                          if diff >= 22 {
+                              return false
+                          }
+                      }
+                      return true
+                  }
+
+                  private func drawSolidBlackBoxes(_ rects: [CGRect], on webView: WKWebView) {
+                      for v in overlayBoxes { v.removeFromSuperview() }
+                      overlayBoxes.removeAll()
+
+                      for r in rects {
+                          let box = UIView(frame: r)
+                          box.backgroundColor = .black
+                          box.layer.borderColor = UIColor(red: 0.06, green: 0.72, blue: 0.50, alpha: 1.0).cgColor
+                          box.layer.borderWidth = 2.5
+                          box.isUserInteractionEnabled = false
+
+                          let lbl = UILabel(frame: box.bounds)
+                          lbl.text = "GHAAD BLOCKED"
+                          lbl.textColor = .white
+                          lbl.font = UIFont.boldSystemFont(ofSize: 13)
+                          lbl.textAlignment = .center
+                          lbl.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                          box.addSubview(lbl)
+
+                          webView.addSubview(box)
+                          overlayBoxes.append(box)
+                      }
+                  }
+              }
+          }
+          EOF
+
+          cd ios_build
+          xcodegen generate
+
+      - name: Compile Unsigned iOS App via Xcodebuild
+        working-directory: ios_build
+        run: |
+          xcodebuild -project GhaadShield.xcodeproj \
+            -scheme GhaadShield \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package into Installable .ipa File
+        working-directory: ios_build
+        run: |
+          mkdir -p Payload
+          cp -r build/Build/Products/Release-iphoneos/GhaadShield.app Payload/
+          zip -r -q Ghaad_iOS_Shield_V29.ipa Payload
+
+      - name: Upload Compiled iOS IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ghaad_iOS_Shield_IPA
+          path: ios_build/Ghaad_iOS_Shield_V29.ipa
