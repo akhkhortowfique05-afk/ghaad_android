@@ -1,28 +1,25 @@
-name: Build Ghaad macOS V31 Lightweight App & DMG (~70MB)
+name: Build Ghaad macOS V31 Universal Installer
 
 on:
   push:
   workflow_dispatch:
 
 jobs:
-  build-macos:
-    runs-on: macos-14
+  build-macos-package:
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Set up Python 3.10 with Tkinter Support on macOS
+      - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install Python-Tk on macOS
-        run: brew install python-tk@3.10
-
-      - name: Export ONNX, Strip Heavy PyTorch, and Build Lightweight macOS .app
+      - name: Export Gender ONNX & Package macOS V31 Universal App
         run: |
-          mkdir -p macos_build
-          cd macos_build
+          mkdir -p macos_pkg/GhaadShieldV31_Mac
+          cd macos_pkg
 
-          # Step 1: Temporarily install ultralytics ONLY to export gender_cls.onnx
+          # 1. Download & Export 128x128 Gender Classification ONNX Model
           curl -L -s -o best_Gender_classification.pt "https://huggingface.co/DhanushSGowda/yolov8n-gender-classification/resolve/main/best_Gender_classification.pt"
           pip install --quiet ultralytics onnx
 
@@ -31,19 +28,12 @@ jobs:
           import shutil
           model = YOLO('best_Gender_classification.pt')
           model.export(format='onnx', imgsz=128, opset=15)
-          shutil.copy('best_Gender_classification.onnx', 'gender_cls.onnx')
+          shutil.copy('best_Gender_classification.onnx', 'GhaadShieldV31_Mac/gender_cls.onnx')
           print("Exported gender_cls.onnx successfully!")
           PYEOF
 
-          # Step 2: CRITICAL SIZE FIX — Uninstall PyTorch & Ultralytics so bundle is ~70MB instead of 2.8GB!
-          pip uninstall -y ultralytics torch torchvision torchaudio
-          rm -f best_Gender_classification.pt best_Gender_classification.onnx
-
-          # Step 3: Install ONLY lightweight runtime packages
-          pip install --quiet nudenet onnxruntime opencv-python-headless mss numpy pyinstaller
-
-          # Step 4: Create macOS Native Blocker Script (ghaad_macos.py)
-          cat << 'EOF' > ghaad_macos.py
+          # 2. Create Core macOS Blocker Engine (ghaad_macos.py)
+          cat << 'EOF' > GhaadShieldV31_Mac/ghaad_macos.py
           import os
           import sys
           import time
@@ -56,11 +46,6 @@ jobs:
           from nudenet import NudeDetector
           import tkinter as tk
 
-          if sys.stdout is None:
-              sys.stdout = open(os.devnull, "w")
-          if sys.stderr is None:
-              sys.stderr = open(os.devnull, "w")
-
           STRICT_EXPOSED_CLASSES = {
               "FEMALE_BREAST_EXPOSED": 0.18,
               "FEMALE_BREAST_COVERED": 0.24,
@@ -72,40 +57,7 @@ jobs:
               "ANUS_EXPOSED": 0.18,
           }
 
-          def get_resource_path(filename):
-              if getattr(sys, "frozen", False):
-                  exe_dir = os.path.dirname(sys.executable)
-                  p1 = os.path.join(exe_dir, filename)
-                  if os.path.exists(p1):
-                      return p1
-                  res_dir = os.path.abspath(os.path.join(exe_dir, "..", "Resources", filename))
-                  if os.path.exists(res_dir):
-                      return res_dir
-                  if hasattr(sys, "_MEIPASS"):
-                      p2 = os.path.join(sys._MEIPASS, filename)
-                      if os.path.exists(p2):
-                          return p2
-              return os.path.abspath(filename)
-
-          def register_macos_launch_agent():
-              """Registers macOS LaunchAgent with KeepAlive=True so it auto-starts on boot and auto-restarts if closed!"""
-              if not getattr(sys, "frozen", False):
-                  return
-              try:
-                  exe_path = os.path.abspath(sys.executable)
-                  agents_dir = os.path.expanduser("~/Library/LaunchAgents")
-                  os.makedirs(agents_dir, exist_ok=True)
-                  plist_path = os.path.join(agents_dir, "com.ghaad.shield.v31.plist")
-                  plist_data = {
-                      "Label": "com.ghaad.shield.v31",
-                      "ProgramArguments": [exe_path],
-                      "RunAtLoad": True,
-                      "KeepAlive": True,
-                  }
-                  with open(plist_path, "wb") as fp:
-                      plistlib.dump(plist_data, fp)
-              except Exception:
-                  pass
+          BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
           class PureOnnxGenderClassifier:
               def __init__(self, onnx_path):
@@ -118,17 +70,12 @@ jobs:
                   fw, fh = x2 - x1, y2 - y1
                   if fw < 14 or fh < 14:
                       return False
-
-                  # 1. Beard / Mustache Shadow Check (Protects Men, Speakers, Qaris & Imams!)
                   if self.has_beard_shadow(bgr_frame, x1, y1, x2, y2):
                       return False
 
-                  # 2. Crop & Run Dedicated Gender ONNX Model
                   pad_x, pad_y = fw // 5, fh // 5
-                  cx1 = max(0, x1 - pad_x)
-                  cy1 = max(0, y1 - pad_y)
-                  cx2 = min(orig_w, x2 + pad_x)
-                  cy2 = min(orig_h, y2 + pad_y)
+                  cx1, cy1 = max(0, x1 - pad_x), max(0, y1 - pad_y)
+                  cx2, cy2 = min(orig_w, x2 + pad_x), min(orig_h, y2 + pad_y)
                   crop = bgr_frame[cy1:cy2, cx1:cx2]
                   if crop.size == 0 or crop.shape[0] < 12 or crop.shape[1] < 12:
                       return False
@@ -139,31 +86,25 @@ jobs:
                   blob = np.transpose(blob, (2, 0, 1))[np.newaxis, ...]
 
                   probs = self.session.run(None, {self.input_name: blob})[0][0]
-                  female_prob = float(probs[0])
-                  male_prob = float(probs[1])
-                  return female_prob >= 0.60 and female_prob > male_prob
+                  return float(probs[0]) >= 0.60 and float(probs[0]) > float(probs[1])
 
               @staticmethod
               def has_beard_shadow(bgr_frame, x1, y1, x2, y2):
                   fw, fh = x2 - x1, y2 - y1
-                  mx1 = max(0, x1 + fw // 4)
-                  mx2 = min(bgr_frame.shape[1], x2 - fw // 4)
+                  mx1, mx2 = max(0, x1 + fw // 4), min(bgr_frame.shape[1], x2 - fw // 4)
                   up_y1, up_y2 = max(0, y1 + fh // 5), min(bgr_frame.shape[0], y1 + fh // 2)
                   lo_y1, lo_y2 = max(0, y1 + (fh * 2) // 3), min(bgr_frame.shape[0], y2)
-
                   upper_roi = bgr_frame[up_y1:up_y2, mx1:mx2]
                   lower_roi = bgr_frame[lo_y1:lo_y2, mx1:mx2]
                   if upper_roi.size == 0 or lower_roi.size == 0:
                       return False
-
                   upper_lum = float(np.mean(cv2.cvtColor(upper_roi, cv2.COLOR_BGR2GRAY)))
                   lower_lum = float(np.mean(cv2.cvtColor(lower_roi, cv2.COLOR_BGR2GRAY)))
                   return (upper_lum - lower_lum) >= 22.0
 
           class GhaadMacOSV31Blocker:
               def __init__(self):
-                  register_macos_launch_agent()
-                  onnx_path = get_resource_path("gender_cls.onnx")
+                  onnx_path = os.path.join(BASE_DIR, "gender_cls.onnx")
                   self.gender_ai = PureOnnxGenderClassifier(onnx_path)
                   self.nude_detector = NudeDetector()
 
@@ -172,7 +113,6 @@ jobs:
                   self.screen_w = self.root.winfo_screenwidth()
                   self.screen_h = self.root.winfo_screenheight()
 
-                  # Top-left status badge below macOS menu bar
                   self.root.geometry("280x34+20+32")
                   self.root.overrideredirect(True)
                   self.root.attributes("-topmost", True)
@@ -212,10 +152,8 @@ jobs:
 
               def sample_outer_border(self, frame, rect):
                   h, w = frame.shape[:2]
-                  l = max(2, rect[0] - 8)
-                  t = max(2, rect[1] - 8)
-                  r = min(w - 3, rect[2] + 8)
-                  b = min(h - 3, rect[3] + 8)
+                  l, t = max(2, rect[0] - 8), max(2, rect[1] - 8)
+                  r, b = min(w - 3, rect[2] + 8), min(h - 3, rect[3] + 8)
                   sig = []
                   for i in range(1, 4):
                       sig.append(frame[t, l + (r - l) * i // 4].tolist())
@@ -227,10 +165,10 @@ jobs:
               def is_scene_changed(self, old_sig, new_sig):
                   if not old_sig or not new_sig or len(old_sig) != len(new_sig):
                       return True
-                  diff_cnt = 0
-                  for c1, c2 in zip(old_sig, new_sig):
-                      if abs(c1[0] - c2[0]) + abs(c1[1] - c2[1]) + abs(c1[2] - c2[2]) > 70:
-                          diff_cnt += 1
+                  diff_cnt = sum(
+                      1 for c1, c2 in zip(old_sig, new_sig)
+                      if abs(c1[0] - c2[0]) + abs(c1[1] - c2[1]) + abs(c1[2] - c2[2]) > 70
+                  )
                   return diff_cnt >= 6
 
               def scan_loop(self):
@@ -241,125 +179,62 @@ jobs:
                           try:
                               sct_img = sct.grab(monitor)
                               raw_frame = np.array(sct_img)[:, :, :3]
-                              # Normalize macOS Retina (2x) capture directly to logical screen coordinates!
-                              frame = cv2.resize(
-                                  raw_frame,
-                                  (self.screen_w, self.screen_h),
-                                  interpolation=cv2.INTER_LINEAR,
-                              )
+                              frame = cv2.resize(raw_frame, (self.screen_w, self.screen_h), interpolation=cv2.INTER_LINEAR)
                               orig_h, orig_w = self.screen_h, self.screen_w
                               now = time.time()
 
                               with self.lock:
-                                  kept_locked = []
-                                  for lb in self.locked_boxes:
-                                      cur_sig = self.sample_outer_border(frame, lb["rect"])
-                                      if not self.is_scene_changed(lb["sig"], cur_sig):
-                                          kept_locked.append(lb)
-                                  self.locked_boxes = kept_locked
-
-                              scale = 0.65
-                              small_frame = cv2.resize(
-                                  frame,
-                                  (int(orig_w * scale), int(orig_h * scale)),
-                                  interpolation=cv2.INTER_LINEAR,
-                              )
-                              preds = self.nude_detector.detect(small_frame)
-
-                              confirmed_male_faces = []
-                              confirmed_female_faces = []
-                              exposed_body_boxes = []
-
-                              for p in preds:
-                                  cls_name = p["class"]
-                                  score = p["score"]
-                                  x, y, w, h = p["box"]
-                                  rect = [
-                                      int(x / scale),
-                                      int(y / scale),
-                                      int((x + w) / scale),
-                                      int((y + h) / scale),
+                                  self.locked_boxes = [
+                                      lb for lb in self.locked_boxes
+                                      if not self.is_scene_changed(lb["sig"], self.sample_outer_border(frame, lb["rect"]))
                                   ]
 
+                              scale = 0.65
+                              small_frame = cv2.resize(frame, (int(orig_w * scale), int(orig_h * scale)), interpolation=cv2.INTER_LINEAR)
+                              preds = self.nude_detector.detect(small_frame)
+
+                              confirmed_male_faces, confirmed_female_faces, exposed_body_boxes = [], [], []
+                              for p in preds:
+                                  cls_name, score = p["class"], p["score"]
+                                  x, y, w, h = p["box"]
+                                  rect = [int(x / scale), int(y / scale), int((x + w) / scale), int((y + h) / scale)]
                                   if cls_name in ("FACE_FEMALE", "FACE_MALE") and score >= 0.20:
                                       if self.gender_ai.is_face_female(frame, rect):
                                           confirmed_female_faces.append(rect)
                                       else:
                                           confirmed_male_faces.append(rect)
-                                  elif (
-                                      cls_name in STRICT_EXPOSED_CLASSES
-                                      and score >= STRICT_EXPOSED_CLASSES[cls_name]
-                                  ):
+                                  elif cls_name in STRICT_EXPOSED_CLASSES and score >= STRICT_EXPOSED_CLASSES[cls_name]:
                                       if self.get_bare_skin_pct(frame, rect) >= 26.0:
                                           exposed_body_boxes.append(rect)
 
                               new_boxes = []
-
-                              self.male_safe_memory = [
-                                  m for m in self.male_safe_memory if (now - m[4]) < 2.5
-                              ]
+                              self.male_safe_memory = [m for m in self.male_safe_memory if (now - m[4]) < 2.5]
                               for mx1, my1, mx2, my2 in confirmed_male_faces:
                                   mw, mh = mx2 - mx1, my2 - my1
                                   kissing = False
                                   for fx1, fy1, fx2, fy2 in confirmed_female_faces:
-                                      if self.intersects(
-                                          [mx1, my1, mx2, my2],
-                                          [fx1 - mw, fy1 - mh, fx2 + mw, fy2 + mh],
-                                      ):
+                                      if self.intersects([mx1, my1, mx2, my2], [fx1 - mw, fy1 - mh, fx2 + mw, fy2 + mh]):
                                           kissing = True
-                                          new_boxes.append([
-                                              max(0, min(mx1, fx1) - mw // 2),
-                                              max(0, min(my1, fy1) - mh // 2),
-                                              min(orig_w, max(mx2, fx2) + mw // 2),
-                                              min(orig_h, max(my2, fy2) + mh * 2),
-                                          ])
+                                          new_boxes.append([max(0, min(mx1, fx1) - mw // 2), max(0, min(my1, fy1) - mh // 2), min(orig_w, max(mx2, fx2) + mw // 2), min(orig_h, max(my2, fy2) + mh * 2)])
                                   if not kissing:
-                                      self.male_safe_memory.append([
-                                          max(0, mx1 - int(mw * 2.2)),
-                                          max(0, my1 - int(mh * 0.6)),
-                                          min(orig_w, mx2 + int(mw * 2.2)),
-                                          min(orig_h, my2 + int(mh * 5.0)),
-                                          now,
-                                      ])
+                                      self.male_safe_memory.append([max(0, mx1 - int(mw * 2.2)), max(0, my1 - int(mh * 0.6)), min(orig_w, mx2 + int(mw * 2.2)), min(orig_h, my2 + int(mh * 5.0)), now])
 
-                              active_male_zones = [
-                                  [m[0], m[1], m[2], m[3]] for m in self.male_safe_memory
-                              ]
-
+                              active_male_zones = [[m[0], m[1], m[2], m[3]] for m in self.male_safe_memory]
                               for fx1, fy1, fx2, fy2 in confirmed_female_faces:
                                   fw, fh = fx2 - fx1, fy2 - fy1
-                                  new_boxes.append([
-                                      max(0, int(fx1 - fw * 0.85)),
-                                      max(0, int(fy1 - fh * 0.45)),
-                                      min(orig_w, int(fx2 + fw * 0.85)),
-                                      min(orig_h, int(fy2 + fh * 2.60)),
-                                  ])
+                                  new_boxes.append([max(0, int(fx1 - fw * 0.85)), max(0, int(fy1 - fh * 0.45)), min(orig_w, int(fx2 + fw * 0.85)), min(orig_h, int(fy2 + fh * 2.60))])
 
                               for b_rect in exposed_body_boxes:
-                                  if not any(
-                                      self.intersects(b_rect, mz) for mz in active_male_zones
-                                  ):
+                                  if not any(self.intersects(b_rect, mz) for mz in active_male_zones):
                                       bw, bh = b_rect[2] - b_rect[0], b_rect[3] - b_rect[1]
-                                      new_boxes.append([
-                                          max(0, int(b_rect[0] - bw * 0.85)),
-                                          max(0, int(b_rect[1] - bh * 0.85)),
-                                          min(orig_w, int(b_rect[2] + bw * 0.85)),
-                                          min(orig_h, int(b_rect[3] + bh * 1.20)),
-                                      ])
+                                      new_boxes.append([max(0, int(b_rect[0] - bw * 0.85)), max(0, int(b_rect[1] - bh * 0.85)), min(orig_w, int(b_rect[2] + bw * 0.85)), min(orig_h, int(b_rect[3] + bh * 1.20))])
 
                               with self.lock:
                                   all_rects = [lb["rect"] for lb in self.locked_boxes] + new_boxes
                                   merged = self.merge_boxes(all_rects, orig_h)
-                                  self.locked_boxes = []
-                                  for mr in merged:
-                                      self.locked_boxes.append({
-                                          "rect": mr,
-                                          "sig": self.sample_outer_border(frame, mr),
-                                      })
-
+                                  self.locked_boxes = [{"rect": mr, "sig": self.sample_outer_border(frame, mr)} for mr in merged]
                           except Exception:
                               pass
-
                           elapsed = time.time() - t0
                           if elapsed < 0.06:
                               time.sleep(0.06 - elapsed)
@@ -379,15 +254,10 @@ jobs:
                           for j in range(i + 1, len(merged)):
                               a, b = merged[i], merged[j]
                               if self.intersects(a, b):
-                                  u = [
-                                      min(a[0], b[0]),
-                                      min(a[1], b[1]),
-                                      max(a[2], b[2]),
-                                      max(a[3], b[3]),
-                                  ]
+                                  u = [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
                                   if (u[3] - u[1]) < int(screen_h * 0.72):
                                       merged[i] = u
-                                      merged.remove(j)
+                                      merged.pop(j)
                                       changed = True
                                       break
                           if changed:
@@ -397,34 +267,22 @@ jobs:
               def render_boxes(self):
                   with self.lock:
                       draw_list = [list(lb["rect"]) for lb in self.locked_boxes]
-
                   while len(self.box_pool) < len(draw_list):
                       top = tk.Toplevel(self.root)
                       top.overrideredirect(True)
                       top.attributes("-topmost", True)
                       top.config(bg="#000000", highlightbackground="#10b981", highlightthickness=3)
-                      lbl = tk.Label(
-                          top,
-                          text="GHAAD V31 AI",
-                          fg="#ffffff",
-                          bg="#000000",
-                          font=("Helvetica", 13, "bold"),
-                      )
+                      lbl = tk.Label(top, text="GHAAD V31 AI", fg="#ffffff", bg="#000000", font=("Helvetica", 13, "bold"))
                       lbl.pack(expand=True, fill="both")
                       self.box_pool.append(top)
-
                   for idx, r in enumerate(draw_list):
                       x1, y1, x2, y2 = r
-                      w = max(20, x2 - x1)
-                      h = max(20, y2 - y1)
                       win = self.box_pool[idx]
-                      win.geometry(f"{w}x{h}+{x1}+{y1}")
+                      win.geometry(f"{max(20, x2 - x1)}x{max(20, y2 - y1)}+{x1}+{y1}")
                       win.deiconify()
                       win.lift()
-
                   for idx in range(len(draw_list), len(self.box_pool)):
                       self.box_pool[idx].withdraw()
-
                   self.root.after(45, self.render_boxes)
 
               def run(self):
@@ -435,44 +293,52 @@ jobs:
               app.run()
           EOF
 
-          # Step 5: Compile macOS .app Bundle with PyInstaller (Excluding heavy libraries!)
-          pyinstaller --noconsole --onedir --noconfirm --name "GhaadShieldV31" \
-            --osx-bundle-identifier "com.ghaad.macos.shield" \
-            --add-data "gender_cls.onnx:." \
-            --exclude-module torch \
-            --exclude-module torchvision \
-            --exclude-module ultralytics \
-            --collect-all nudenet \
-            --collect-all onnxruntime \
-            ghaad_macos.py
-
-          cp gender_cls.onnx dist/GhaadShieldV31.app/Contents/MacOS/
-
-          # Step 6: Create 1-Click macOS Installer Script (Install_Ghaad_macOS.command)
-          mkdir -p dmg_staging
-          cp -R dist/GhaadShieldV31.app dmg_staging/
-
-          cat << 'EOF' > dmg_staging/Install_Ghaad_macOS.command
+          # 3. Create 1-Click Double-Clickable macOS Installer (Install_Ghaad_macOS.command)
+          cat << 'EOF' > GhaadShieldV31_Mac/Install_Ghaad_macOS.command
           #!/bin/bash
           DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-          echo "Installing Ghaad AI Shield V31 to /Applications..."
-          cp -R "$DIR/GhaadShieldV31.app" /Applications/
-          xattr -cr /Applications/GhaadShieldV31.app
-          open /Applications/GhaadShieldV31.app
-          echo "✅ Ghaad AI Shield V31 is now installed and running on your Mac!"
+          INSTALL_DIR="$HOME/.ghaad_macos_v31"
+          mkdir -p "$INSTALL_DIR"
+          cp -R "$DIR/"* "$INSTALL_DIR/"
+
+          echo "Setting up Ghaad AI Shield V31 on your Mac..."
+          python3 -m venv "$INSTALL_DIR/venv"
+          "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
+          "$INSTALL_DIR/venv/bin/pip" install --quiet nudenet onnxruntime opencv-python-headless mss numpy
+
+          # Register macOS LaunchAgent for Automatic Startup & KeepAlive
+          mkdir -p "$HOME/Library/LaunchAgents"
+          cat << PLIST > "$HOME/Library/LaunchAgents/com.ghaad.shield.v31.plist"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>Label</key>
+              <string>com.ghaad.shield.v31</string>
+              <key>ProgramArguments</key>
+              <array>
+                  <string>$INSTALL_DIR/venv/bin/python3</string>
+                  <string>$INSTALL_DIR/ghaad_macos.py</string>
+              </array>
+              <key>RunAtLoad</key>
+              <true/>
+              <key>KeepAlive</key>
+              <true/>
+          </dict>
+          </plist>
+          PLIST
+
+          launchctl unload "$HOME/Library/LaunchAgents/com.ghaad.shield.v31.plist" 2>/dev/null
+          launchctl load "$HOME/Library/LaunchAgents/com.ghaad.shield.v31.plist"
+          nohup "$INSTALL_DIR/venv/bin/python3" "$INSTALL_DIR/ghaad_macos.py" >/dev/null 2>&1 &
+          echo "✅ Ghaad AI Shield V31 is now installed and running on macOS!"
           EOF
-          chmod +x dmg_staging/Install_Ghaad_macOS.command
+          chmod +x GhaadShieldV31_Mac/Install_Ghaad_macOS.command
 
-          # Step 7: Package into native macOS .dmg Disk Image
-          hdiutil create -volname "Ghaad AI Shield V31" \
-            -srcfolder dmg_staging \
-            -ov -format UDZO \
-            Ghaad_macOS_V31_Installer.dmg
+          zip -r -q Ghaad_macOS_V31_Installer.zip GhaadShieldV31_Mac
 
-          ls -lh Ghaad_macOS_V31_Installer.dmg
-
-      - name: Upload Compiled macOS DMG Installer
+      - name: Upload macOS V31 Universal Installer
         uses: actions/upload-artifact@v4
         with:
-          name: Ghaad_macOS_V31_Installer_DMG
-          path: macos_build/Ghaad_macOS_V31_Installer.dmg
+          name: Ghaad_macOS_V31_Installer
+          path: macos_pkg/Ghaad_macOS_V31_Installer.zip
