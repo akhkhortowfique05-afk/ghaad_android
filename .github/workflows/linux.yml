@@ -1,0 +1,468 @@
+name: Build Ghaad Linux V31 Standalone Binary & Installer
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install Linux System Dependencies (Tkinter & OpenCV/X11)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk python3-dev libgl1 libglib2.0-0 libx11-6 libxext6 libxrender1
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Export Gender ONNX & Build Linux Standalone Binary
+        run: |
+          mkdir -p linux_build
+          cd linux_build
+
+          curl -L -s -o best_Gender_classification.pt "https://huggingface.co/DhanushSGowda/yolov8n-gender-classification/resolve/main/best_Gender_classification.pt"
+          pip install --quiet ultralytics nudenet onnx onnxruntime opencv-python-headless mss numpy pyinstaller
+
+          # 1. Export Dedicated 128x128 Gender Model to ONNX
+          python3 - << 'PYEOF'
+          from ultralytics import YOLO
+          import shutil
+          model = YOLO('best_Gender_classification.pt')
+          model.export(format='onnx', imgsz=128, opset=15)
+          shutil.copy('best_Gender_classification.onnx', 'gender_cls.onnx')
+          print("Exported gender_cls.onnx successfully!")
+          PYEOF
+
+          # 2. Generate Complete Linux Blocker Python Script (ghaad_linux.py)
+          cat << 'EOF' > ghaad_linux.py
+          import os
+          import sys
+          import time
+          import threading
+          import cv2
+          import mss
+          import numpy as np
+          import onnxruntime as ort
+          from nudenet import NudeDetector
+          import tkinter as tk
+
+          if sys.stdout is None:
+              sys.stdout = open(os.devnull, "w")
+          if sys.stderr is None:
+              sys.stderr = open(os.devnull, "w")
+
+          STRICT_EXPOSED_CLASSES = {
+              "FEMALE_BREAST_EXPOSED": 0.18,
+              "FEMALE_BREAST_COVERED": 0.24,
+              "FEMALE_GENITALIA_EXPOSED": 0.18,
+              "FEMALE_GENITALIA_COVERED": 0.24,
+              "BUTTOCKS_EXPOSED": 0.20,
+              "BUTTOCKS_COVERED": 0.26,
+              "BELLY_EXPOSED": 0.22,
+              "ANUS_EXPOSED": 0.18,
+          }
+
+          def get_resource_path(filename):
+              if getattr(sys, "frozen", False):
+                  exe_dir = os.path.dirname(sys.executable)
+                  p1 = os.path.join(exe_dir, filename)
+                  if os.path.exists(p1):
+                      return p1
+                  if hasattr(sys, "_MEIPASS"):
+                      p2 = os.path.join(sys._MEIPASS, filename)
+                      if os.path.exists(p2):
+                          return p2
+              return os.path.abspath(filename)
+
+          def register_linux_autostart():
+              """Registers XDG Desktop Autostart so Ghaad launches automatically on every Linux login."""
+              if not getattr(sys, "frozen", False):
+                  return
+              try:
+                  exe_path = os.path.abspath(sys.executable)
+                  autostart_dir = os.path.expanduser("~/.config/autostart")
+                  os.makedirs(autostart_dir, exist_ok=True)
+                  desktop_file = os.path.join(autostart_dir, "ghaad-shield.desktop")
+                  content = f"""[Desktop Entry]
+          Type=Application
+          Name=Ghaad AI Shield V31
+          Exec="{exe_path}"
+          Hidden=false
+          NoDisplay=false
+          X-GNOME-Autostart-enabled=true
+          Comment=Ghaad AI Content Shield for Linux
+          """
+                  with open(desktop_file, "w") as f:
+                      f.write(content)
+              except Exception:
+                  pass
+
+          class PureOnnxGenderClassifier:
+              def __init__(self, onnx_path):
+                  self.session = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+                  self.input_name = self.session.get_inputs()[0].name
+
+              def is_face_female(self, bgr_frame, box):
+                  orig_h, orig_w = bgr_frame.shape[:2]
+                  x1, y1, x2, y2 = box
+                  fw, fh = x2 - x1, y2 - y1
+                  if fw < 14 or fh < 14:
+                      return False
+
+                  # 1. Beard / Mustache Shadow Check (Protects Men, Speakers, Qaris & Imams!)
+                  if self.has_beard_shadow(bgr_frame, x1, y1, x2, y2):
+                      return False
+
+                  # 2. Crop & Run Dedicated Gender ONNX Model
+                  pad_x, pad_y = fw // 5, fh // 5
+                  cx1 = max(0, x1 - pad_x)
+                  cy1 = max(0, y1 - pad_y)
+                  cx2 = min(orig_w, x2 + pad_x)
+                  cy2 = min(orig_h, y2 + pad_y)
+                  crop = bgr_frame[cy1:cy2, cx1:cx2]
+                  if crop.size == 0 or crop.shape[0] < 12 or crop.shape[1] < 12:
+                      return False
+
+                  rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                  resized = cv2.resize(rgb, (128, 128), interpolation=cv2.INTER_LINEAR)
+                  blob = resized.astype(np.float32) / 255.0
+                  blob = np.transpose(blob, (2, 0, 1))[np.newaxis, ...]
+
+                  probs = self.session.run(None, {self.input_name: blob})[0][0]
+                  female_prob = float(probs[0])
+                  male_prob = float(probs[1])
+                  return female_prob >= 0.60 and female_prob > male_prob
+
+              @staticmethod
+              def has_beard_shadow(bgr_frame, x1, y1, x2, y2):
+                  fw, fh = x2 - x1, y2 - y1
+                  mx1 = max(0, x1 + fw // 4)
+                  mx2 = min(bgr_frame.shape[1], x2 - fw // 4)
+                  up_y1, up_y2 = max(0, y1 + fh // 5), min(bgr_frame.shape[0], y1 + fh // 2)
+                  lo_y1, lo_y2 = max(0, y1 + (fh * 2) // 3), min(bgr_frame.shape[0], y2)
+
+                  upper_roi = bgr_frame[up_y1:up_y2, mx1:mx2]
+                  lower_roi = bgr_frame[lo_y1:lo_y2, mx1:mx2]
+                  if upper_roi.size == 0 or lower_roi.size == 0:
+                      return False
+
+                  upper_lum = float(np.mean(cv2.cvtColor(upper_roi, cv2.COLOR_BGR2GRAY)))
+                  lower_lum = float(np.mean(cv2.cvtColor(lower_roi, cv2.COLOR_BGR2GRAY)))
+                  return (upper_lum - lower_lum) >= 22.0
+
+          class GhaadLinuxV31Blocker:
+              def __init__(self):
+                  register_linux_autostart()
+                  onnx_path = get_resource_path("gender_cls.onnx")
+                  self.gender_ai = PureOnnxGenderClassifier(onnx_path)
+                  self.nude_detector = NudeDetector()
+
+                  self.root = tk.Tk()
+                  self.root.title("GhaadLinuxBadge")
+                  # Top-left status badge (270x34) so user immediately sees Ghaad V31 is active on Linux
+                  self.root.geometry("270x34+20+15")
+                  self.root.overrideredirect(True)
+                  self.root.attributes("-topmost", True)
+                  self.root.config(bg="#0b0f19")
+
+                  badge = tk.Label(
+                      self.root,
+                      text="● GHAAD V31 LINUX ACTIVE",
+                      fg="#10b981",
+                      bg="#0b0f19",
+                      font=("Sans", 10, "bold"),
+                  )
+                  badge.pack(expand=True, fill="both")
+
+                  self.box_pool = []
+                  self.locked_boxes = []  # List of dicts: {'rect': [x1,y1,x2,y2], 'sig': [...]}
+                  self.male_safe_memory = []
+                  self.lock = threading.Lock()
+                  self.running = True
+
+                  self.root.after(45, self.render_boxes)
+                  self.worker = threading.Thread(target=self.scan_loop, daemon=True)
+                  self.worker.start()
+
+              def get_bare_skin_pct(self, frame, box):
+                  orig_h, orig_w = frame.shape[:2]
+                  x1, y1 = max(0, box[0]), max(0, box[1])
+                  x2, y2 = min(orig_w, box[2]), min(orig_h, box[3])
+                  if x2 - x1 < 10 or y2 - y1 < 10:
+                      return 0.0
+                  roi = frame[y1:y2:2, x1:x2:2]
+                  if roi.size == 0:
+                      return 0.0
+                  ycrcb = cv2.cvtColor(roi, cv2.COLOR_BGR2YCrCb)
+                  mask = cv2.inRange(ycrcb, (40, 134, 80), (255, 173, 126))
+                  return (np.count_nonzero(mask) * 100.0) / (mask.size + 1e-5)
+
+              def sample_outer_border(self, frame, rect):
+                  h, w = frame.shape[:2]
+                  l = max(2, rect[0] - 8)
+                  t = max(2, rect[1] - 8)
+                  r = min(w - 3, rect[2] + 8)
+                  b = min(h - 3, rect[3] + 8)
+                  sig = []
+                  for i in range(1, 4):
+                      sig.append(frame[t, l + (r - l) * i // 4].tolist())
+                      sig.append(frame[b, l + (r - l) * i // 4].tolist())
+                      sig.append(frame[t + (b - t) * i // 4, l].tolist())
+                      sig.append(frame[t + (b - t) * i // 4, r].tolist())
+                  return sig
+
+              def is_scene_changed(self, old_sig, new_sig):
+                  if not old_sig or not new_sig or len(old_sig) != len(new_sig):
+                      return True
+                  diff_cnt = 0
+                  for c1, c2 in zip(old_sig, new_sig):
+                      if abs(c1[0] - c2[0]) + abs(c1[1] - c2[1]) + abs(c1[2] - c2[2]) > 70:
+                          diff_cnt += 1
+                  return diff_cnt >= 6
+
+              def scan_loop(self):
+                  scale = 0.65
+                  with mss.mss() as sct:
+                      monitor = sct.monitors[1]
+                      while self.running:
+                          t0 = time.time()
+                          try:
+                              sct_img = sct.grab(monitor)
+                              frame = np.array(sct_img)[:, :, :3]
+                              orig_h, orig_w = frame.shape[:2]
+                              now = time.time()
+
+                              # 1. Verify existing locked boxes via outer border (Zero-Flicker!)
+                              with self.lock:
+                                  kept_locked = []
+                                  for lb in self.locked_boxes:
+                                      cur_sig = self.sample_outer_border(frame, lb["rect"])
+                                      if not self.is_scene_changed(lb["sig"], cur_sig):
+                                          kept_locked.append(lb)
+                                  self.locked_boxes = kept_locked
+
+                              small_frame = cv2.resize(
+                                  frame,
+                                  (int(orig_w * scale), int(orig_h * scale)),
+                                  interpolation=cv2.INTER_LINEAR,
+                              )
+                              preds = self.nude_detector.detect(small_frame)
+
+                              confirmed_male_faces = []
+                              confirmed_female_faces = []
+                              exposed_body_boxes = []
+
+                              for p in preds:
+                                  cls_name = p["class"]
+                                  score = p["score"]
+                                  x, y, w, h = p["box"]
+                                  rect = [
+                                      int(x / scale),
+                                      int(y / scale),
+                                      int((x + w) / scale),
+                                      int((y + h) / scale),
+                                  ]
+
+                                  if cls_name in ("FACE_FEMALE", "FACE_MALE") and score >= 0.20:
+                                      if self.gender_ai.is_face_female(frame, rect):
+                                          confirmed_female_faces.append(rect)
+                                      else:
+                                          confirmed_male_faces.append(rect)
+                                  elif (
+                                      cls_name in STRICT_EXPOSED_CLASSES
+                                      and score >= STRICT_EXPOSED_CLASSES[cls_name]
+                                  ):
+                                      if self.get_bare_skin_pct(frame, rect) >= 26.0:
+                                          exposed_body_boxes.append(rect)
+
+                              new_boxes = []
+
+                              self.male_safe_memory = [
+                                  m for m in self.male_safe_memory if (now - m[4]) < 2.5
+                              ]
+                              for mx1, my1, mx2, my2 in confirmed_male_faces:
+                                  mw, mh = mx2 - mx1, my2 - my1
+                                  kissing = False
+                                  for fx1, fy1, fx2, fy2 in confirmed_female_faces:
+                                      if self.intersects(
+                                          [mx1, my1, mx2, my2],
+                                          [fx1 - mw, fy1 - mh, fx2 + mw, fy2 + mh],
+                                      ):
+                                          kissing = True
+                                          new_boxes.append([
+                                              max(0, min(mx1, fx1) - mw // 2),
+                                              max(0, min(my1, fy1) - mh // 2),
+                                              min(orig_w, max(mx2, fx2) + mw // 2),
+                                              min(orig_h, max(my2, fy2) + mh * 2),
+                                          ])
+                                  if not kissing:
+                                      self.male_safe_memory.append([
+                                          max(0, mx1 - int(mw * 2.2)),
+                                          max(0, my1 - int(mh * 0.6)),
+                                          min(orig_w, mx2 + int(mw * 2.2)),
+                                          min(orig_h, my2 + int(mh * 5.0)),
+                                          now,
+                                      ])
+
+                              active_male_zones = [
+                                  [m[0], m[1], m[2], m[3]] for m in self.male_safe_memory
+                              ]
+
+                              for fx1, fy1, fx2, fy2 in confirmed_female_faces:
+                                  fw, fh = fx2 - fx1, fy2 - fy1
+                                  new_boxes.append([
+                                      max(0, int(fx1 - fw * 0.85)),
+                                      max(0, int(fy1 - fh * 0.45)),
+                                      min(orig_w, int(fx2 + fw * 0.85)),
+                                      min(orig_h, int(fy2 + fh * 2.60)),
+                                  ])
+
+                              for b_rect in exposed_body_boxes:
+                                  if not any(
+                                      self.intersects(b_rect, mz) for mz in active_male_zones
+                                  ):
+                                      bw, bh = b_rect[2] - b_rect[0], b_rect[3] - b_rect[1]
+                                      new_boxes.append([
+                                          max(0, int(b_rect[0] - bw * 0.85)),
+                                          max(0, int(b_rect[1] - bh * 0.85)),
+                                          min(orig_w, int(b_rect[2] + bw * 0.85)),
+                                          min(orig_h, int(b_rect[3] + bh * 1.20)),
+                                      ])
+
+                              with self.lock:
+                                  all_rects = [lb["rect"] for lb in self.locked_boxes] + new_boxes
+                                  merged = self.merge_boxes(all_rects, orig_h)
+                                  self.locked_boxes = []
+                                  for mr in merged:
+                                      self.locked_boxes.append({
+                                          "rect": mr,
+                                          "sig": self.sample_outer_border(frame, mr),
+                                      })
+
+                          except Exception:
+                              pass
+
+                          elapsed = time.time() - t0
+                          if elapsed < 0.06:
+                              time.sleep(0.06 - elapsed)
+
+              @staticmethod
+              def intersects(a, b):
+                  return not (a[2] < b[0] or a[0] > b[2] or a[3] < b[1] or a[1] > b[3])
+
+              def merge_boxes(self, boxes, screen_h):
+                  if len(boxes) <= 1:
+                      return boxes
+                  merged = [list(b) for b in boxes]
+                  changed = True
+                  while changed:
+                      changed = False
+                      for i in range(len(merged)):
+                          for j in range(i + 1, len(merged)):
+                              a, b = merged[i], merged[j]
+                              if self.intersects(a, b):
+                                  u = [
+                                      min(a[0], b[0]),
+                                      min(a[1], b[1]),
+                                      max(a[2], b[2]),
+                                      max(a[3], b[3]),
+                                  ]
+                                  if (u[3] - u[1]) < int(screen_h * 0.72):
+                                      merged[i] = u
+                                      merged.pop(j)
+                                      changed = True
+                                      break
+                          if changed:
+                              break
+                  return merged
+
+              def render_boxes(self):
+                  with self.lock:
+                      draw_list = [list(lb["rect"]) for lb in self.locked_boxes]
+
+                  while len(self.box_pool) < len(draw_list):
+                      top = tk.Toplevel(self.root)
+                      top.overrideredirect(True)
+                      top.attributes("-topmost", True)
+                      top.config(bg="#000000", highlightbackground="#10b981", highlightthickness=3)
+                      lbl = tk.Label(
+                          top,
+                          text="GHAAD V31 AI",
+                          fg="#ffffff",
+                          bg="#000000",
+                          font=("Sans", 12, "bold"),
+                      )
+                      lbl.pack(expand=True, fill="both")
+                      self.box_pool.append(top)
+
+                  for idx, r in enumerate(draw_list):
+                      x1, y1, x2, y2 = r
+                      w = max(20, x2 - x1)
+                      h = max(20, y2 - y1)
+                      win = self.box_pool[idx]
+                      win.geometry(f"{w}x{h}+{x1}+{y1}")
+                      win.deiconify()
+                      win.lift()
+
+                  for idx in range(len(draw_list), len(self.box_pool)):
+                      self.box_pool[idx].withdraw()
+
+                  self.root.after(45, self.render_boxes)
+
+              def run(self):
+                  self.root.mainloop()
+
+          if __name__ == "__main__":
+              app = GhaadLinuxV31Blocker()
+              app.run()
+          EOF
+
+          # 3. Compile Linux Binary with PyInstaller
+          pyinstaller --noconsole --onedir --noconfirm --name "GhaadLinuxV31" \
+            --add-data "gender_cls.onnx:." \
+            --collect-all nudenet \
+            --collect-all onnxruntime \
+            ghaad_linux.py
+
+          cp gender_cls.onnx dist/GhaadLinuxV31/
+
+          # 4. Create 1-Click Linux Installer Script (install.sh)
+          cat << 'EOF' > dist/GhaadLinuxV31/install.sh
+          #!/bin/bash
+          echo "Installing Ghaad AI Shield V31 for Linux..."
+          INSTALL_DIR="$HOME/.local/share/GhaadLinuxV31"
+          mkdir -p "$INSTALL_DIR"
+          cp -r ./* "$INSTALL_DIR/"
+          chmod +x "$INSTALL_DIR/GhaadLinuxV31"
+
+          # Create Desktop Autostart Entry
+          mkdir -p "$HOME/.config/autostart"
+          cat << DESKTOP > "$HOME/.config/autostart/ghaad-shield.desktop"
+          [Desktop Entry]
+          Type=Application
+          Name=Ghaad AI Shield V31
+          Exec=$INSTALL_DIR/GhaadLinuxV31
+          Hidden=false
+          NoDisplay=false
+          X-GNOME-Autostart-enabled=true
+          DESKTOP
+
+          # Launch immediately in background
+          nohup "$INSTALL_DIR/GhaadLinuxV31" >/dev/null 2>&1 &
+          echo "✅ Ghaad AI Shield V31 is now installed and running!"
+          EOF
+          chmod +x dist/GhaadLinuxV31/install.sh
+
+          # 5. Package into downloadable .tar.gz archive
+          cd dist
+          tar -czf ../Ghaad_Linux_V31_Installer.tar.gz GhaadLinuxV31
+
+      - name: Upload Compiled Linux Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ghaad_Linux_V31_Installer
+          path: linux_build/Ghaad_Linux_V31_Installer.tar.gz
