@@ -103,8 +103,8 @@ jobs:
                   applicationId "com.ghaad.shield"
                   minSdk 24
                   targetSdk 33
-                  versionCode 99
-                  versionName "29.1"
+                  versionCode 100
+                  versionName "29.2"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -252,7 +252,7 @@ jobs:
                       canvas.drawText("GHAAD BLOCKED", r.centerX(), r.centerY(), textPaint);
                   }
                   if (showBadge) {
-                      canvas.drawText("● V29 (V23+CHROME) STEADY", 30, 105, badgePaint);
+                      canvas.drawText("● V29.2 (LOCKED) STEADY", 30, 105, badgePaint);
                   }
               }
           }
@@ -292,8 +292,8 @@ jobs:
               public DedicatedGenderAndBodyAI(Context context) {
                   try {
                       env = OrtEnvironment.getEnvironment();
-                      File gFile = copyAsset(context, "gender_cls.onnx", "v29_1_gender_cls.onnx");
-                      File nFile = copyAsset(context, "nudenet.onnx", "v29_1_nudenet.onnx");
+                      File gFile = copyAsset(context, "gender_cls.onnx", "v29_2_gender_cls.onnx");
+                      File nFile = copyAsset(context, "nudenet.onnx", "v29_2_nudenet.onnx");
 
                       OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
                       opts.setIntraOpNumThreads(2);
@@ -594,7 +594,15 @@ jobs:
                   "xhamster", "xhamp", ".desi", "pornhub", "xnxx", "xvideos", "redtube", "youporn",
                   "spankbang", "eporner", "brazzers", "chaturbate", "stripchat", "faphouse",
                   "onlyfans", "naughtyamerica", "sex", "porn", "xxx", "nude", "boobs", "pussy",
-                  "hentai", "web series", "ullu", "bhabi", "lust", "zoya rathod", "fucked", "blowjob"
+                  "hentai", "web series", "ullu", "bhabi", "lust", "zoya rathod", "fucked", "blowjob",
+                  "hot girl", "sunnylion","hot song","hot navel","hot kiss","hot belly","erotic song",
+                  "hot telugu song","hot actress","hot","lesbian sex","hot movie","Hentai","Sex Videos","XXX",
+                  "Free Porn","HD Sex","4K Porn","Live Cam","Sex Chat","Anal Sex","Oral Sex","Blowjob","Cunnilingus",
+                  "Threesome","gay","gay sex","Group Sex","BDSM","Bondage","hot saree","Foreplay","robot sex",
+                  "ai sex","Masturbation","LGBTQ+","Bisexual","Transgender"," Trans","Asexual","STI"​
+
+  
+
               };
 
               @Override
@@ -992,16 +1000,19 @@ jobs:
 
                   if (System.currentTimeMillis() < pauseLockUntil) return;
 
-                  // Exact V10 Anti-Uninstall Guard (Only inside Settings / PackageInstaller)
+                  // Updated Anti-Tamper & Anti-Uninstall Guard (Blocks Step 2 Turn-Off, Device Admin & Uninstall)
                   String pkg = activePkg.toLowerCase();
-                  if (pkg.equals("com.android.settings") || pkg.contains("packageinstaller")) {
+                  if (pkg.contains("settings") || pkg.contains("accessibility") || pkg.contains("packageinstaller")) {
                       AccessibilityNodeInfo root = getRootInActiveWindow();
                       if (root != null) {
                           String text = collectAllBrowserText(root, 0).toLowerCase();
                           root.recycle();
-                          if (text.contains("ghaad v29 shield")) {
+                          if (text.contains("ghaad v29 shield") || text.contains("ghaad")) {
                               if (text.contains("uninstall") || text.contains("force stop")
-                                      || text.contains("deactivate") || text.contains("app info")) {
+                                      || text.contains("deactivate") || text.contains("app info")
+                                      || text.contains("use ghaad") || text.contains("use service")
+                                      || text.contains("turn off") || text.contains("stop")
+                                      || text.contains("disable") || text.contains("shortcut")) {
                                   performGlobalAction(GLOBAL_ACTION_BACK);
                                   performGlobalAction(GLOBAL_ACTION_HOME);
                               }
@@ -1052,7 +1063,7 @@ jobs:
                   layout.setPadding(60, 60, 60, 60);
 
                   TextView title = new TextView(this);
-                  title.setText("GHAAD V29.1 FINAL LOCKED\nPure V23 + Chrome + V10 Lock");
+                  title.setText("GHAAD V29.2 FINAL LOCKED\nPure V23 + Chrome + Full Lock");
                   title.setTextColor(Color.parseColor("#10b981"));
                   title.setTextSize(21);
                   title.setGravity(Gravity.CENTER);
@@ -1073,7 +1084,7 @@ jobs:
                   layout.addView(title);
 
                   TextView sub = new TextView(this);
-                  sub.setText("• 100% Pure V23 Engine (Zero Flickering & Male-Safe!)\n• Proven V28 Chrome Adult Site & Incognito Blocker\n• Restored V10 Anti-Uninstall Lock System\n• Protects Keffiyeh Imams & Speakers");
+                  sub.setText("• 100% Pure V23 Engine (Zero Flickering & Male-Safe!)\n• Proven V28 Chrome Adult Site & Incognito Blocker\n• Upgraded Anti-Tamper & Step 2 Lock System\n• Protects Keffiyeh Imams & Speakers");
                   sub.setTextColor(Color.parseColor("#cbd5e1"));
                   sub.setTextSize(14);
                   sub.setGravity(Gravity.CENTER);
@@ -1095,6 +1106,10 @@ jobs:
 
                   btnGuard = new Button(this);
                   btnGuard.setOnClickListener(v -> {
+                      if (GhaadGuardService.instance != null && System.currentTimeMillis() >= GhaadGuardService.pauseLockUntil) {
+                          Toast.makeText(this, "Shield is already active & locked!", Toast.LENGTH_SHORT).show();
+                          return;
+                      }
                       startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
                   });
                   layout.addView(btnGuard);
@@ -1115,7 +1130,7 @@ jobs:
                   btnAdmin.setText((s1 ? "✅ " : "❌ ") + "Step 1: Lock Uninstall (Device Admin)");
 
                   boolean s2 = GhaadGuardService.instance != null;
-                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Step 2: Activate V29.1 Final Shield");
+                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Step 2: Activate V29.2 Final Shield");
               }
           }
           EOF
@@ -1125,10 +1140,10 @@ jobs:
         run: gradle assembleDebug
 
       - name: Prepare APK File
-        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V29_1_FinalLocked.apk
+        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V29_2_FinalLocked.apk
 
       - name: Upload Compiled APK
         uses: actions/upload-artifact@v4
         with:
-          name: Ghaad_V29_1_FinalLocked_APK
-          path: Ghaad_V29_1_FinalLocked.apk
+          name: Ghaad_V29_2_FinalLocked_APK
+          path: Ghaad_V29_2_FinalLocked.apk
