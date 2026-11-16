@@ -1,4 +1,4 @@
-name: Build Ghaad Linux V31 Standalone Binary & Installer
+name: Build Ghaad Linux V31 Lightweight Installer (~75MB)
 
 on:
   push:
@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install Linux System Dependencies (Tkinter & OpenCV/X11)
+      - name: Install Linux System Dependencies (Tkinter & X11)
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-tk python3-dev libgl1 libglib2.0-0 libx11-6 libxext6 libxrender1
@@ -19,15 +19,15 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Export Gender ONNX & Build Linux Standalone Binary
+      - name: Export ONNX, Strip Heavy PyTorch/CUDA, and Build 75MB Linux Package
         run: |
           mkdir -p linux_build
           cd linux_build
 
+          # Step 1: Temporarily install ultralytics ONLY to export gender_cls.onnx
           curl -L -s -o best_Gender_classification.pt "https://huggingface.co/DhanushSGowda/yolov8n-gender-classification/resolve/main/best_Gender_classification.pt"
-          pip install --quiet ultralytics nudenet onnx onnxruntime opencv-python-headless mss numpy pyinstaller
+          pip install --quiet ultralytics onnx
 
-          # 1. Export Dedicated 128x128 Gender Model to ONNX
           python3 - << 'PYEOF'
           from ultralytics import YOLO
           import shutil
@@ -37,7 +37,14 @@ jobs:
           print("Exported gender_cls.onnx successfully!")
           PYEOF
 
-          # 2. Generate Complete Linux Blocker Python Script (ghaad_linux.py)
+          # Step 2: CRITICAL SIZE FIX — Remove 2.5GB PyTorch, NVIDIA CUDA & Ultralytics before PyInstaller runs!
+          pip freeze | grep -E "nvidia|torch|ultralytics|triton|sympy|scipy|matplotlib|pandas" | xargs -r pip uninstall -y
+          rm -f best_Gender_classification.pt best_Gender_classification.onnx
+
+          # Step 3: Install ONLY lightweight CPU runtime packages
+          pip install --quiet nudenet onnxruntime opencv-python-headless mss numpy pyinstaller
+
+          # Step 4: Create Complete Linux Blocker Script (ghaad_linux.py)
           cat << 'EOF' > ghaad_linux.py
           import os
           import sys
@@ -79,7 +86,6 @@ jobs:
               return os.path.abspath(filename)
 
           def register_linux_autostart():
-              """Registers XDG Desktop Autostart so Ghaad launches automatically on every Linux login."""
               if not getattr(sys, "frozen", False):
                   return
               try:
@@ -163,7 +169,6 @@ jobs:
 
                   self.root = tk.Tk()
                   self.root.title("GhaadLinuxBadge")
-                  # Top-left status badge (270x34) so user immediately sees Ghaad V31 is active on Linux
                   self.root.geometry("270x34+20+15")
                   self.root.overrideredirect(True)
                   self.root.attributes("-topmost", True)
@@ -179,7 +184,7 @@ jobs:
                   badge.pack(expand=True, fill="both")
 
                   self.box_pool = []
-                  self.locked_boxes = []  # List of dicts: {'rect': [x1,y1,x2,y2], 'sig': [...]}
+                  self.locked_boxes = []
                   self.male_safe_memory = []
                   self.lock = threading.Lock()
                   self.running = True
@@ -236,7 +241,6 @@ jobs:
                               orig_h, orig_w = frame.shape[:2]
                               now = time.time()
 
-                              # 1. Verify existing locked boxes via outer border (Zero-Flicker!)
                               with self.lock:
                                   kept_locked = []
                                   for lb in self.locked_boxes:
@@ -421,16 +425,19 @@ jobs:
               app.run()
           EOF
 
-          # 3. Compile Linux Binary with PyInstaller
+          # Step 5: Compile Lightweight Linux Binary with PyInstaller (Strict Exclusions!)
           pyinstaller --noconsole --onedir --noconfirm --name "GhaadLinuxV31" \
             --add-data "gender_cls.onnx:." \
+            --exclude-module torch \
+            --exclude-module torchvision \
+            --exclude-module ultralytics \
             --collect-all nudenet \
             --collect-all onnxruntime \
             ghaad_linux.py
 
           cp gender_cls.onnx dist/GhaadLinuxV31/
 
-          # 4. Create 1-Click Linux Installer Script (install.sh)
+          # Step 6: Create 1-Click Linux Installer Script (install.sh)
           cat << 'EOF' > dist/GhaadLinuxV31/install.sh
           #!/bin/bash
           echo "Installing Ghaad AI Shield V31 for Linux..."
@@ -439,7 +446,6 @@ jobs:
           cp -r ./* "$INSTALL_DIR/"
           chmod +x "$INSTALL_DIR/GhaadLinuxV31"
 
-          # Create Desktop Autostart Entry
           mkdir -p "$HOME/.config/autostart"
           cat << DESKTOP > "$HOME/.config/autostart/ghaad-shield.desktop"
           [Desktop Entry]
@@ -451,18 +457,18 @@ jobs:
           X-GNOME-Autostart-enabled=true
           DESKTOP
 
-          # Launch immediately in background
           nohup "$INSTALL_DIR/GhaadLinuxV31" >/dev/null 2>&1 &
-          echo "✅ Ghaad AI Shield V31 is now installed and running!"
+          echo "✅ Ghaad AI Shield V31 (~75MB) is now installed and running!"
           EOF
           chmod +x dist/GhaadLinuxV31/install.sh
 
-          # 5. Package into downloadable .tar.gz archive
+          # Step 7: Package into lightweight .tar.gz archive and print size
           cd dist
           tar -czf ../Ghaad_Linux_V31_Installer.tar.gz GhaadLinuxV31
+          ls -lh ../Ghaad_Linux_V31_Installer.tar.gz
 
-      - name: Upload Compiled Linux Package
+      - name: Upload Compiled Lightweight Linux Package
         uses: actions/upload-artifact@v4
         with:
-          name: Ghaad_Linux_V31_Installer
+          name: Ghaad_Linux_V31_Installer_75MB
           path: linux_build/Ghaad_Linux_V31_Installer.tar.gz
