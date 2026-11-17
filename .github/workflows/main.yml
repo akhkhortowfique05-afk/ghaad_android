@@ -1,7 +1,6 @@
-name: Build Ghaad V29.2 Final Locked APK
+name: Build Ghaad V29.3 Personal Device Owner APK
 
 on:
-  push:
   workflow_dispatch:
 
 jobs:
@@ -25,7 +24,7 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Generate V29.2 Final Locked Android Project
+      - name: Generate V29.3 Personal Device Owner Android Project
         run: |
           mkdir -p android_build/app/src/main/java/com/ghaad/shield
           mkdir -p android_build/app/src/main/res/xml
@@ -77,7 +76,7 @@ jobs:
                   mavenCentral()
               }
           }
-          rootProject.name = "GhaadV29FinalLocked"
+          rootProject.name = "GhaadV29Personal"
           include ':app'
           EOF
 
@@ -103,8 +102,8 @@ jobs:
                   applicationId "com.ghaad.shield"
                   minSdk 24
                   targetSdk 33
-                  versionCode 100
-                  versionName "29.2"
+                  versionCode 101
+                  versionName "29.3-Personal"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -125,7 +124,6 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-              <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
 
@@ -253,7 +251,7 @@ jobs:
                       canvas.drawText("GHAAD BLOCKED", r.centerX(), r.centerY(), textPaint);
                   }
                   if (showBadge) {
-                      canvas.drawText("● V29.2 (LOCKED) STEADY", 30, 105, badgePaint);
+                      canvas.drawText("● V29.3 (DEVICE OWNER) STEADY", 30, 105, badgePaint);
                   }
               }
           }
@@ -293,8 +291,8 @@ jobs:
               public DedicatedGenderAndBodyAI(Context context) {
                   try {
                       env = OrtEnvironment.getEnvironment();
-                      File gFile = copyAsset(context, "gender_cls.onnx", "v29_2_gender_cls.onnx");
-                      File nFile = copyAsset(context, "nudenet.onnx", "v29_2_nudenet.onnx");
+                      File gFile = copyAsset(context, "gender_cls.onnx", "v29_3_gender_cls.onnx");
+                      File nFile = copyAsset(context, "nudenet.onnx", "v29_3_nudenet.onnx");
 
                       OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
                       opts.setIntraOpNumThreads(2);
@@ -572,6 +570,7 @@ jobs:
           public class GhaadGuardService extends AccessibilityService {
               public static GhaadGuardService instance;
               public static volatile String activePkg = "";
+              public static volatile long pauseLockUntil = 0;
 
               private WindowManager windowManager;
               private CensorOverlayView overlayView;
@@ -990,7 +989,9 @@ jobs:
                       }
                   }
 
-                  // Permanent Anti-Tamper & Anti-Uninstall Guard (Blocks Step 2 Turn-Off, Device Admin & Uninstall)
+                  if (System.currentTimeMillis() < pauseLockUntil) return;
+
+                  // Anti-Tamper & Anti-Uninstall Guard (Blocks Step 2 Turn-Off, Device Admin & Uninstall)
                   String pkg = activePkg.toLowerCase();
                   if (pkg.contains("settings") || pkg.contains("accessibility") || pkg.contains("packageinstaller")) {
                       AccessibilityNodeInfo root = getRootInActiveWindow();
@@ -1026,17 +1027,14 @@ jobs:
           package com.ghaad.shield;
 
           import android.app.Activity;
-          import android.app.AlertDialog;
           import android.app.admin.DevicePolicyManager;
           import android.content.ComponentName;
           import android.content.Context;
           import android.content.Intent;
-          import android.content.pm.PackageInfo;
+          import android.content.SharedPreferences;
           import android.graphics.Color;
-          import android.net.Uri;
           import android.os.Bundle;
-          import android.os.Handler;
-          import android.os.Looper;
+          import android.os.UserManager;
           import android.provider.Settings;
           import android.view.Gravity;
           import android.widget.Button;
@@ -1044,23 +1042,22 @@ jobs:
           import android.widget.TextView;
           import android.widget.Toast;
 
-          import org.json.JSONObject;
-
-          import java.io.BufferedReader;
-          import java.io.InputStreamReader;
-          import java.net.HttpURLConnection;
-          import java.net.URL;
-          import java.util.concurrent.Executors;
+          import java.util.Calendar;
 
           public class MainActivity extends Activity {
-              private static final String VERSION_JSON_URL =
-                      "https://raw.githubusercontent.com/akhkhortowfique05-afk/ghaad_android/main/version.json";
+              private static final String PREFS_NAME = "ghaad_personal_lock_prefs";
+              private static final String KEY_UNLOCK_READY_AT = "unlock_ready_at";
+              private static final String KEY_UNLOCK_WINDOW_UNTIL = "unlock_window_until";
+              private static final long COOLDOWN_MS = 24L * 60L * 60L * 1000L;
+              private static final long UNLOCK_WINDOW_MS = 10L * 60L * 1000L;
 
-              private Button btnAdmin, btnGuard, btnUpdate;
+              private Button btnAdmin, btnGuard, btnUnlock;
+              private SharedPreferences prefs;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
+                  prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
 
                   LinearLayout layout = new LinearLayout(this);
                   layout.setOrientation(LinearLayout.VERTICAL);
@@ -1069,7 +1066,7 @@ jobs:
                   layout.setPadding(60, 60, 60, 60);
 
                   TextView title = new TextView(this);
-                  title.setText("GHAAD V29.2 FINAL LOCKED\nPure V23 + Chrome + Full Lock");
+                  title.setText("GHAAD V29.3 PERSONAL\nDevice Owner + 24h Lock");
                   title.setTextColor(Color.parseColor("#10b981"));
                   title.setTextSize(21);
                   title.setGravity(Gravity.CENTER);
@@ -1077,7 +1074,7 @@ jobs:
                   layout.addView(title);
 
                   TextView sub = new TextView(this);
-                  sub.setText("• 100% Pure V23 Engine (Zero Flickering & Male-Safe!)\n• Proven V28 Chrome Blocker\n• Permanent Lock (Cannot Deactivate from App)\n• Built-in Update Checker");
+                  sub.setText("• 100% Pure V23 Engine + Chrome Blocker\n• Device Owner: Uninstall Disabled & Safe Mode Blocked\n• Strict Night Lock (10 PM - 7 AM)\n• 24-Hour Cooldown Before Any Unlock");
                   sub.setTextColor(Color.parseColor("#cbd5e1"));
                   sub.setTextSize(14);
                   sub.setGravity(Gravity.CENTER);
@@ -1088,8 +1085,8 @@ jobs:
                   btnAdmin.setOnClickListener(v -> {
                       DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
                       ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
-                      if (dpm != null && dpm.isAdminActive(comp)) {
-                          Toast.makeText(this, "Device Admin is permanently locked!", Toast.LENGTH_SHORT).show();
+                      if (dpm != null && (dpm.isDeviceOwnerApp(getPackageName()) || dpm.isAdminActive(comp)) && !isCurrentlyUnlocked()) {
+                          Toast.makeText(this, "Device Owner / Admin is locked!", Toast.LENGTH_SHORT).show();
                           return;
                       }
                       Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
@@ -1104,8 +1101,8 @@ jobs:
 
                   btnGuard = new Button(this);
                   btnGuard.setOnClickListener(v -> {
-                      if (GhaadGuardService.instance != null) {
-                          Toast.makeText(this, "Shield is permanently active & locked!", Toast.LENGTH_SHORT).show();
+                      if (GhaadGuardService.instance != null && !isCurrentlyUnlocked()) {
+                          Toast.makeText(this, "Shield is active & locked!", Toast.LENGTH_SHORT).show();
                           return;
                       }
                       startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
@@ -1113,86 +1110,156 @@ jobs:
                   layout.addView(btnGuard);
 
                   TextView space2 = new TextView(this);
-                  space2.setHeight(40);
+                  space2.setHeight(45);
                   layout.addView(space2);
 
-                  btnUpdate = new Button(this);
-                  btnUpdate.setText("🔄 Check for Updates");
-                  btnUpdate.setOnClickListener(v -> checkForUpdates(true));
-                  layout.addView(btnUpdate);
+                  btnUnlock = new Button(this);
+                  btnUnlock.setOnClickListener(v -> handleUnlockClick());
+                  layout.addView(btnUnlock);
 
                   setContentView(layout);
-                  checkForUpdates(false);
+                  applyDeviceOwnerPoliciesIfLocked();
               }
 
-              private void checkForUpdates(boolean manual) {
-                  if (manual) {
-                      Toast.makeText(this, "Checking for updates...", Toast.LENGTH_SHORT).show();
-                  }
-                  Executors.newSingleThreadExecutor().execute(() -> {
-                      try {
-                          URL url = new URL(VERSION_JSON_URL);
-                          HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                          conn.setConnectTimeout(5000);
-                          conn.setReadTimeout(5000);
-                          BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                          StringBuilder sb = new StringBuilder();
-                          String line;
-                          while ((line = br.readLine()) != null) {
-                              sb.append(line);
-                          }
-                          br.close();
-                          conn.disconnect();
-
-                          JSONObject json = new JSONObject(sb.toString());
-                          int latestCode = json.getInt("versionCode");
-                          String latestName = json.optString("versionName", "New");
-                          String apkUrl = json.optString("apkUrl", "https://ghaad-shield.netlify.app/");
-
-                          PackageInfo pInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
-                          int currentCode = pInfo.versionCode;
-
-                          new Handler(Looper.getMainLooper()).post(() -> {
-                              if (latestCode > currentCode) {
-                                  new AlertDialog.Builder(MainActivity.this)
-                                          .setTitle("Update Available (v" + latestName + ")")
-                                          .setMessage("A newer version of Ghaad Shield is available. Tap below to download and install.")
-                                          .setPositiveButton("Download Update", (d, w) -> {
-                                              Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(apkUrl));
-                                              startActivity(i);
-                                          })
-                                          .setNegativeButton("Later", null)
-                                          .show();
-                              } else if (manual) {
-                                  Toast.makeText(MainActivity.this, "You are on the latest version!", Toast.LENGTH_SHORT).show();
-                              }
-                          });
-                      } catch (Exception e) {
-                          if (manual) {
-                              new Handler(Looper.getMainLooper()).post(() ->
-                                      Toast.makeText(MainActivity.this, "Could not check updates. Check internet.", Toast.LENGTH_SHORT).show()
-                              );
+              private void applyDeviceOwnerPoliciesIfLocked() {
+                  try {
+                      DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+                      ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
+                      if (dpm != null && dpm.isDeviceOwnerApp(getPackageName())) {
+                          if (!isCurrentlyUnlocked()) {
+                              dpm.setUninstallBlocked(comp, getPackageName(), true);
+                              dpm.addUserRestriction(comp, UserManager.DISALLOW_SAFE_BOOT);
                           }
                       }
-                  });
+                  } catch (Exception ignored) {}
+              }
+
+              private boolean isNightLockHours() {
+                  Calendar cal = Calendar.getInstance();
+                  int hour = cal.get(Calendar.HOUR_OF_DAY);
+                  return (hour >= 22 || hour < 7);
+              }
+
+              private boolean isCurrentlyUnlocked() {
+                  long now = System.currentTimeMillis();
+                  long until = prefs.getLong(KEY_UNLOCK_WINDOW_UNTIL, 0L);
+                  if (now < until && !isNightLockHours()) {
+                      GhaadGuardService.pauseLockUntil = until;
+                      return true;
+                  }
+                  return false;
+              }
+
+              private void handleUnlockClick() {
+                  long now = System.currentTimeMillis();
+                  long readyAt = prefs.getLong(KEY_UNLOCK_READY_AT, 0L);
+
+                  if (isCurrentlyUnlocked()) {
+                      prefs.edit().putLong(KEY_UNLOCK_WINDOW_UNTIL, 0L).apply();
+                      GhaadGuardService.pauseLockUntil = 0L;
+                      applyDeviceOwnerPoliciesIfLocked();
+                      Toast.makeText(this, "Shield Re-Locked Immediately!", Toast.LENGTH_SHORT).show();
+                      updateStatus();
+                      return;
+                  }
+
+                  if (readyAt > 0L && now < readyAt) {
+                      prefs.edit().putLong(KEY_UNLOCK_READY_AT, 0L).apply();
+                      Toast.makeText(this, "Unlock Request Cancelled. Stay Strong!", Toast.LENGTH_SHORT).show();
+                      updateStatus();
+                      return;
+                  }
+
+                  if (isNightLockHours()) {
+                      Toast.makeText(this, "Night Strict Lock (10 PM - 7 AM)! Try after 7:00 AM.", Toast.LENGTH_LONG).show();
+                      updateStatus();
+                      return;
+                  }
+
+                  if (readyAt > 0L && now >= readyAt) {
+                      long windowUntil = now + UNLOCK_WINDOW_MS;
+                      prefs.edit()
+                              .putLong(KEY_UNLOCK_READY_AT, 0L)
+                              .putLong(KEY_UNLOCK_WINDOW_UNTIL, windowUntil)
+                              .apply();
+                      GhaadGuardService.pauseLockUntil = windowUntil;
+
+                      try {
+                          DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+                          ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
+                          if (dpm != null) {
+                              if (dpm.isDeviceOwnerApp(getPackageName())) {
+                                  dpm.setUninstallBlocked(comp, getPackageName(), false);
+                                  dpm.clearUserRestriction(comp, UserManager.DISALLOW_SAFE_BOOT);
+                              } else if (dpm.isAdminActive(comp)) {
+                                  dpm.removeActiveAdmin(comp);
+                              }
+                          }
+                      } catch (Exception ignored) {}
+
+                      Toast.makeText(this, "Unlocked for 10 minutes!", Toast.LENGTH_LONG).show();
+                      updateStatus();
+                      return;
+                  }
+
+                  long newReadyAt = now + COOLDOWN_MS;
+                  prefs.edit().putLong(KEY_UNLOCK_READY_AT, newReadyAt).apply();
+                  Toast.makeText(this, "24-Hour Cooldown Started! Come back tomorrow.", Toast.LENGTH_LONG).show();
+                  updateStatus();
               }
 
               @Override
               protected void onResume() {
                   super.onResume();
+                  applyDeviceOwnerPoliciesIfLocked();
                   updateStatus();
               }
 
               private void updateStatus() {
+                  boolean unlocked = isCurrentlyUnlocked();
+                  long now = System.currentTimeMillis();
+
                   DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
                   ComponentName comp = new ComponentName(this, GhaadAdminReceiver.class);
-                  boolean s1 = dpm != null && dpm.isAdminActive(comp);
-                  btnAdmin.setText((s1 ? "✅ " : "❌ ") + "Step 1: Lock Uninstall (Device Admin)");
-                  btnAdmin.setEnabled(!s1);
+                  boolean isOwner = dpm != null && dpm.isDeviceOwnerApp(getPackageName());
+                  boolean isAdmin = dpm != null && dpm.isAdminActive(comp);
+
+                  if (isOwner) {
+                      btnAdmin.setText("✅ Step 1: Device Owner Active (Uninstall Disabled)");
+                      btnAdmin.setEnabled(false);
+                  } else {
+                      btnAdmin.setText((isAdmin ? "✅ " : "❌ ") + "Step 1: Lock Uninstall (Run ADB for Device Owner)");
+                      btnAdmin.setEnabled(!isAdmin || unlocked);
+                  }
 
                   boolean s2 = GhaadGuardService.instance != null;
-                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Step 2: Activate V29.2 Final Shield");
-                  btnGuard.setEnabled(!s2);
+                  btnGuard.setText((s2 ? "✅ " : "❌ ") + "Step 2: Activate V29.3 Personal Shield");
+                  btnGuard.setEnabled(!s2 || unlocked);
+
+                  long readyAt = prefs.getLong(KEY_UNLOCK_READY_AT, 0L);
+                  long windowUntil = prefs.getLong(KEY_UNLOCK_WINDOW_UNTIL, 0L);
+
+                  if (unlocked) {
+                      long minsLeft = Math.max(1L, (windowUntil - now) / 60000L);
+                      btnUnlock.setText("🔓 Unlocked (" + minsLeft + "m left) - Tap to Re-Lock");
+                  } else if (readyAt > 0L && now < readyAt) {
+                      long remMs = readyAt - now;
+                      long hrs = remMs / (3600L * 1000L);
+                      long mins = (remMs % (3600L * 1000L)) / 60000L;
+                      btnUnlock.setText("⏳ Unlock in " + hrs + "h " + mins + "m (Tap to Cancel)");
+                  } else if (readyAt > 0L && now >= readyAt) {
+                      if (isNightLockHours()) {
+                          btnUnlock.setText("🌙 Night Lock (10 PM-7 AM) - Wait till 7 AM");
+                      } else {
+                          btnUnlock.setText("✅ 24h Done! Tap to Unlock (10 min)");
+                      }
+                  } else {
+                      if (isNightLockHours()) {
+                          btnUnlock.setText("🌙 Night Strict Lock Active (10 PM-7 AM)");
+                      } else {
+                          btnUnlock.setText("🔒 Request Unlock (24h Cooldown)");
+                      }
+                  }
               }
           }
           EOF
@@ -1202,10 +1269,10 @@ jobs:
         run: gradle assembleDebug
 
       - name: Prepare APK File
-        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V29_2_FinalLocked.apk
+        run: cp android_build/app/build/outputs/apk/debug/app-debug.apk Ghaad_V29_3_Personal_DeviceOwner.apk
 
       - name: Upload Compiled APK
         uses: actions/upload-artifact@v4
         with:
-          name: Ghaad_V29_2_FinalLocked_APK
-          path: Ghaad_V29_2_FinalLocked.apk
+          name: Ghaad_V29_3_Personal_DeviceOwner_APK
+          path: Ghaad_V29_3_Personal_DeviceOwner.apk
