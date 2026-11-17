@@ -592,7 +592,10 @@ jobs:
               private volatile boolean blockedSiteDetectedInBrowser = false;
 
               private static final String[] BLOCKED_KEYWORDS = {
-                  // Paste your keyword strings here
+                  "xhamster", "xhamp", ".desi", "pornhub", "xnxx", "xvideos", "redtube", "youporn",
+                  "spankbang", "eporner", "brazzers", "chaturbate", "stripchat", "faphouse",
+                  "onlyfans", "naughtyamerica", "sex", "porn", "xxx", "nude", "boobs", "pussy",
+                  "hentai", "web series", "ullu", "bhabi", "lust", "zoya rathod", "fucked", "blowjob"
               };
 
               @Override
